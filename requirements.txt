@@ -1,1 +1,1 @@
-sounddevice
+# No external runtime dependencies in Sprint 1.
