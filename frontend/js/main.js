@@ -4,7 +4,27 @@ const STATES = {
   RECORDING: "RECORDING",
   STOPPING: "STOPPING",
   COMPLETED: "COMPLETED",
+  PLAYBACK: "PLAYBACK",
   ERROR: "ERROR",
+};
+
+const DEFAULT_IDLE_MESSAGE =
+  "Nenhuma captura ativa. Clique em Iniciar captura para escolher uma fonte com áudio.";
+
+const DEFAULT_PLAYBACK_MESSAGE =
+  "O áudio finalizado aparecerá aqui para reprodução local.";
+
+const DEFAULT_UPLOAD_MESSAGE =
+  "O áudio pode ser enviado para o backend quando estiver pronto.";
+
+const UPLOAD_ENDPOINT = "http://127.0.0.1:8000/api/audio";
+const UPLOAD_TIMEOUT_MS = 30000;
+
+const UPLOAD_STATES = {
+  UPLOAD_IDLE: "UPLOAD_IDLE",
+  UPLOAD_LOADING: "UPLOAD_LOADING",
+  UPLOAD_SUCCESS: "UPLOAD_SUCCESS",
+  UPLOAD_ERROR: "UPLOAD_ERROR",
 };
 
 const elements = {
@@ -15,6 +35,21 @@ const elements = {
   blobSize: document.getElementById("blob-size"),
   blobType: document.getElementById("blob-type"),
   blobDuration: document.getElementById("blob-duration"),
+  playbackPanel: document.getElementById("playback-panel"),
+  playbackAudio: document.getElementById("playback-audio"),
+  playbackMessage: document.getElementById("playback-message"),
+  playbackDuration: document.getElementById("playback-duration"),
+  downloadLink: document.getElementById("download-link"),
+  newRecordingButton: document.getElementById("new-recording-button"),
+  uploadPanel: document.getElementById("upload-panel"),
+  uploadButton: document.getElementById("upload-button"),
+  uploadState: document.getElementById("upload-state"),
+  uploadMessage: document.getElementById("upload-message"),
+  uploadResult: document.getElementById("upload-result"),
+  uploadId: document.getElementById("upload-id"),
+  uploadFilename: document.getElementById("upload-filename"),
+  uploadContentType: document.getElementById("upload-content-type"),
+  uploadSize: document.getElementById("upload-size"),
 };
 
 const mimeTypePriority = [
@@ -31,45 +66,53 @@ let activeDisplayStream = null;
 let activeAudioStream = null;
 let recorder = null;
 let recordedBlob = null;
+let recordedObjectUrl = "";
+let recordedMimeType = "";
 let selectedMimeType = "";
 let chunks = [];
 let recordingStartedAt = null;
+let recordingDurationMs = null;
 let cleanupInProgress = false;
 let stopRequestedBy = null;
+let suppressAudioEvents = false;
+let uploadState = UPLOAD_STATES.UPLOAD_IDLE;
+let uploadAbortController = null;
+let uploadTimeoutId = null;
+let uploadTimedOut = false;
 
-function formatBytes(bytes) {
-  if (!Number.isFinite(bytes)) {
-    return "-";
-  }
-
-  if (bytes === 0) {
-    return "0 B";
-  }
-
-  const units = ["B", "KB", "MB", "GB"];
-  const exponent = Math.min(
-    Math.floor(Math.log(bytes) / Math.log(1024)),
-    units.length - 1,
-  );
-  const value = bytes / 1024 ** exponent;
-  const precision = value >= 10 || exponent === 0 ? 0 : 1;
-  return `${value.toFixed(precision)} ${units[exponent]}`;
-}
-
-function formatDuration(milliseconds) {
+function formatApproxDuration(milliseconds) {
   if (!Number.isFinite(milliseconds)) {
     return "-";
   }
 
-  const seconds = milliseconds / 1000;
+  const roundedSeconds = Math.max(0, Math.round(milliseconds / 1000));
 
-  if (seconds < 60) {
-    return `${seconds.toFixed(seconds >= 10 ? 0 : 1)} s`;
+  if (roundedSeconds < 60) {
+    return `${roundedSeconds} s`;
   }
 
-  const minutes = Math.floor(seconds / 60);
-  const remainingSeconds = Math.round(seconds % 60);
-  return `${minutes} min ${remainingSeconds.toString().padStart(2, "0")} s`;
+  const minutes = Math.floor(roundedSeconds / 60);
+  const seconds = roundedSeconds % 60;
+  return `${minutes} min ${String(seconds).padStart(2, "0")} s`;
+}
+
+function formatClockDuration(seconds) {
+  if (!Number.isFinite(seconds)) {
+    return "-";
+  }
+
+  const totalSeconds = Math.max(0, Math.round(seconds));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const remainingSeconds = totalSeconds % 60;
+
+  if (hours > 0) {
+    return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(
+      remainingSeconds,
+    ).padStart(2, "0")}`;
+  }
+
+  return `${String(minutes).padStart(2, "0")}:${String(remainingSeconds).padStart(2, "0")}`;
 }
 
 function getCaptureErrorMessage(error) {
@@ -97,10 +140,46 @@ function getCaptureErrorMessage(error) {
   }
 }
 
+function getExtensionForMimeType(mimeType) {
+  const normalizedMimeType = (mimeType || "").toLowerCase();
+
+  if (normalizedMimeType.includes("webm")) {
+    return "webm";
+  }
+
+  if (normalizedMimeType.includes("mp4")) {
+    return "mp4";
+  }
+
+  if (normalizedMimeType.includes("ogg")) {
+    return "ogg";
+  }
+
+  if (normalizedMimeType.includes("wav")) {
+    return "wav";
+  }
+
+  return "audio";
+}
+
+function createDownloadFileName(mimeType) {
+  const now = new Date();
+  const parts = [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, "0"),
+    String(now.getDate()).padStart(2, "0"),
+    String(now.getHours()).padStart(2, "0"),
+    String(now.getMinutes()).padStart(2, "0"),
+    String(now.getSeconds()).padStart(2, "0"),
+  ];
+
+  return `audio-transcriber-${parts.join("-")}.${getExtensionForMimeType(mimeType)}`;
+}
+
 function setState(nextState, message, type = "info") {
   captureState = nextState;
   elements.stateBadge.textContent = nextState;
-  elements.stateBadge.classList.remove("is-recording", "is-warning", "is-error");
+  elements.stateBadge.classList.remove("is-recording", "is-warning", "is-error", "is-playback");
 
   if (type === "recording") {
     elements.stateBadge.classList.add("is-recording");
@@ -108,6 +187,8 @@ function setState(nextState, message, type = "info") {
     elements.stateBadge.classList.add("is-warning");
   } else if (type === "error") {
     elements.stateBadge.classList.add("is-error");
+  } else if (type === "playback") {
+    elements.stateBadge.classList.add("is-playback");
   }
 
   if (message) {
@@ -124,18 +205,367 @@ function setState(nextState, message, type = "info") {
 }
 
 function updateDiagnostics({ blob = null, mimeType = "-", durationMs = null } = {}) {
+  const effectiveDurationMs = Number.isFinite(durationMs) ? durationMs : recordingDurationMs;
+  const durationLabel = blob
+    ? formatApproxDuration(effectiveDurationMs)
+    : "-";
+
   elements.blobSize.textContent = blob ? formatBytes(blob.size) : "Sem gravação";
   elements.blobType.textContent = blob ? mimeType : "-";
-  elements.blobDuration.textContent = blob ? formatDuration(durationMs) : "-";
+  elements.blobDuration.textContent = durationLabel;
 }
 
-function resetSessionState() {
-  chunks = [];
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes)) {
+    return "-";
+  }
+
+  if (bytes === 0) {
+    return "0 B";
+  }
+
+  const units = ["B", "KB", "MB", "GB"];
+  const exponent = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  const value = bytes / 1024 ** exponent;
+  const precision = value >= 10 || exponent === 0 ? 0 : 1;
+
+  return `${value.toFixed(precision)} ${units[exponent]}`;
+}
+
+function formatUploadSize(bytes) {
+  return formatBytes(bytes);
+}
+
+function setUploadState(nextState, message, type = "info") {
+  uploadState = nextState;
+  elements.uploadState.textContent = nextState;
+  elements.uploadState.classList.remove("is-loading", "is-success", "is-error");
+
+  if (type === "loading") {
+    elements.uploadState.classList.add("is-loading");
+  } else if (type === "success") {
+    elements.uploadState.classList.add("is-success");
+  } else if (type === "error") {
+    elements.uploadState.classList.add("is-error");
+  }
+
+  if (message) {
+    elements.uploadMessage.textContent = message;
+  }
+
+  elements.uploadButton.disabled = nextState === UPLOAD_STATES.UPLOAD_LOADING || !recordedBlob;
+}
+
+function clearUploadResult() {
+  elements.uploadResult.hidden = true;
+  elements.uploadId.textContent = "-";
+  elements.uploadFilename.textContent = "-";
+  elements.uploadContentType.textContent = "-";
+  elements.uploadSize.textContent = "-";
+}
+
+function clearUploadUi({ hidePanel = true, hasRecording = false } = {}) {
+  if (uploadTimeoutId) {
+    clearTimeout(uploadTimeoutId);
+    uploadTimeoutId = null;
+  }
+
+  uploadAbortController = null;
+  uploadTimedOut = false;
+  clearUploadResult();
+
+  if (hidePanel) {
+    elements.uploadPanel.hidden = true;
+  }
+
+  elements.uploadMessage.textContent = DEFAULT_UPLOAD_MESSAGE;
+  setUploadState(UPLOAD_STATES.UPLOAD_IDLE, DEFAULT_UPLOAD_MESSAGE);
+  elements.uploadButton.disabled = !hasRecording;
+}
+
+function prepareUploadUi() {
+  elements.uploadPanel.hidden = false;
+  clearUploadResult();
+  elements.uploadButton.disabled = false;
+  setUploadState(
+    UPLOAD_STATES.UPLOAD_IDLE,
+    "Áudio pronto para enviar para transcrição.",
+  );
+}
+
+function renderUploadResult(payload) {
+  elements.uploadResult.hidden = false;
+  elements.uploadId.textContent = payload.id || "-";
+  elements.uploadFilename.textContent = payload.filename || "-";
+  elements.uploadContentType.textContent = payload.contentType || "-";
+  elements.uploadSize.textContent = formatUploadSize(Number(payload.size));
+}
+
+function getUploadErrorMessage(status, payload) {
+  const backendMessage =
+    payload && typeof payload.message === "string" ? payload.message.trim() : "";
+
+  if (backendMessage) {
+    return backendMessage;
+  }
+
+  switch (status) {
+    case 400:
+      return "O backend rejeitou o upload porque nenhum arquivo válido foi enviado.";
+    case 413:
+      return "O arquivo enviado excede o limite permitido de 50 MB.";
+    case 415:
+      return "O formato de áudio enviado não é aceito pelo backend.";
+    case 500:
+      return "O backend encontrou um erro interno ao salvar o arquivo.";
+    default:
+      return "O upload falhou. Tente novamente.";
+  }
+}
+
+function getUploadNetworkErrorMessage(error) {
+  if (uploadTimedOut) {
+    return "O upload demorou demais para responder. Tente novamente.";
+  }
+
+  if (error && error.name === "AbortError") {
+    return "O upload foi interrompido antes de ser concluído.";
+  }
+
+  return "Não foi possível conectar ao backend para enviar o áudio.";
+}
+
+function getUploadFileName() {
+  return createDownloadFileName(recordedMimeType || recordedBlob?.type || "");
+}
+
+async function readJsonResponse(response) {
+  const text = await response.text();
+  if (!text) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error("Resposta JSON inválida do backend.");
+  }
+}
+
+async function uploadRecording() {
+  if (!recordedBlob || uploadState === UPLOAD_STATES.UPLOAD_LOADING) {
+    return;
+  }
+
+  const fileName = getUploadFileName();
+  const formData = new FormData();
+  formData.append("file", recordedBlob, fileName);
+
+  uploadAbortController = new AbortController();
+  uploadTimedOut = false;
+  uploadTimeoutId = window.setTimeout(() => {
+    uploadTimedOut = true;
+    uploadAbortController?.abort();
+  }, UPLOAD_TIMEOUT_MS);
+
+  setUploadState(
+    UPLOAD_STATES.UPLOAD_LOADING,
+    "Enviando áudio para o backend...",
+    "loading",
+  );
+  elements.uploadResult.hidden = true;
+
+  try {
+    const response = await fetch(UPLOAD_ENDPOINT, {
+      method: "POST",
+      body: formData,
+      signal: uploadAbortController.signal,
+    });
+
+    if (uploadTimeoutId) {
+      clearTimeout(uploadTimeoutId);
+      uploadTimeoutId = null;
+    }
+
+    let payload;
+    try {
+      payload = await readJsonResponse(response);
+    } catch {
+      setUploadState(
+        UPLOAD_STATES.UPLOAD_ERROR,
+        "A resposta do backend não pôde ser interpretada.",
+        "error",
+      );
+      return;
+    }
+
+    if (!response.ok) {
+      setUploadState(
+        UPLOAD_STATES.UPLOAD_ERROR,
+        getUploadErrorMessage(response.status, payload),
+        "error",
+      );
+      return;
+    }
+
+    if (!payload || typeof payload !== "object") {
+      setUploadState(
+        UPLOAD_STATES.UPLOAD_ERROR,
+        "A resposta do backend não pôde ser interpretada.",
+        "error",
+      );
+      return;
+    }
+
+    renderUploadResult(payload);
+    setUploadState(
+      UPLOAD_STATES.UPLOAD_SUCCESS,
+      "Áudio enviado com sucesso.",
+      "success",
+    );
+  } catch (error) {
+    setUploadState(
+      UPLOAD_STATES.UPLOAD_ERROR,
+      getUploadNetworkErrorMessage(error),
+      "error",
+    );
+  } finally {
+    if (uploadTimeoutId) {
+      clearTimeout(uploadTimeoutId);
+      uploadTimeoutId = null;
+    }
+    uploadAbortController = null;
+    uploadTimedOut = false;
+  }
+}
+
+function updatePlaybackDurationLabel(durationSeconds) {
+  if (Number.isFinite(durationSeconds) && durationSeconds > 0) {
+    const realDuration = formatClockDuration(durationSeconds);
+    elements.playbackDuration.textContent = realDuration;
+    elements.blobDuration.textContent = realDuration;
+    return;
+  }
+
+  const fallbackDuration = formatApproxDuration(recordingDurationMs);
+  elements.playbackDuration.textContent = fallbackDuration;
+  if (recordedBlob) {
+    elements.blobDuration.textContent = fallbackDuration;
+  }
+}
+
+function clearPlayerUi() {
+  suppressAudioEvents = true;
+  elements.playbackAudio.pause();
+  elements.playbackAudio.removeAttribute("src");
+  elements.playbackAudio.load();
+  suppressAudioEvents = false;
+
+  elements.playbackPanel.hidden = true;
+  elements.playbackAudio.hidden = true;
+  elements.downloadLink.hidden = true;
+  elements.newRecordingButton.hidden = true;
+  elements.downloadLink.removeAttribute("href");
+  elements.downloadLink.removeAttribute("download");
+  elements.playbackMessage.textContent = DEFAULT_PLAYBACK_MESSAGE;
+  elements.playbackDuration.textContent = "-";
+}
+
+function revokeRecordedObjectUrl() {
+  if (!recordedObjectUrl) {
+    return;
+  }
+
+  URL.revokeObjectURL(recordedObjectUrl);
+  recordedObjectUrl = "";
+}
+
+function clearRecordedSession({ keepMessage = false } = {}) {
+  suppressAudioEvents = true;
+  elements.playbackAudio.pause();
+  suppressAudioEvents = false;
+
+  clearPlayerUi();
+  revokeRecordedObjectUrl();
+
   recordedBlob = null;
+  recordedMimeType = "";
   selectedMimeType = "";
+  chunks = [];
   recordingStartedAt = null;
+  recordingDurationMs = null;
   stopRequestedBy = null;
+  recorder = null;
+  activeAudioStream = null;
+  activeDisplayStream = null;
+
+  clearUploadUi({ hasRecording: false });
+
   updateDiagnostics();
+
+  if (!keepMessage) {
+    setState(STATES.IDLE, DEFAULT_IDLE_MESSAGE);
+  }
+}
+
+function showRecordedSession(blob, mimeType, durationMs) {
+  clearPlayerUi();
+  revokeRecordedObjectUrl();
+
+  recordedBlob = blob;
+  recordedMimeType = blob.type || mimeType || "application/octet-stream";
+  recordingDurationMs = durationMs;
+  recordedObjectUrl = URL.createObjectURL(blob);
+
+  elements.playbackPanel.hidden = false;
+  elements.playbackAudio.hidden = false;
+  elements.playbackAudio.src = recordedObjectUrl;
+  elements.playbackAudio.load();
+  elements.downloadLink.hidden = false;
+  elements.downloadLink.href = recordedObjectUrl;
+  elements.downloadLink.download = createDownloadFileName(recordedMimeType);
+  elements.newRecordingButton.hidden = false;
+  elements.playbackMessage.textContent = "Áudio pronto para reprodução e download local.";
+
+  prepareUploadUi();
+  updateDiagnostics({
+    blob,
+    mimeType: recordedMimeType,
+    durationMs,
+  });
+  updatePlaybackDurationLabel(Number.isFinite(durationMs) ? durationMs / 1000 : null);
+}
+
+function selectSupportedMimeType() {
+  if (typeof MediaRecorder === "undefined") {
+    return "";
+  }
+
+  return (
+    mimeTypePriority.find((mimeType) => MediaRecorder.isTypeSupported(mimeType)) || ""
+  );
+}
+
+function finalizeRecording() {
+  const mimeType = selectedMimeType || recorder?.mimeType || "application/octet-stream";
+  const durationMs = recordingStartedAt ? performance.now() - recordingStartedAt : null;
+  const blobMimeType = mimeType || "application/octet-stream";
+  const blob = new Blob(chunks, { type: blobMimeType });
+
+  showRecordedSession(blob, blobMimeType, durationMs);
+  cleanupStreams();
+
+  recorder = null;
+  activeDisplayStream = null;
+  activeAudioStream = null;
+  recordingStartedAt = null;
+
+  const completionMessage =
+    stopRequestedBy === "external"
+      ? "A captura foi encerrada pela interface do navegador."
+      : "Gravação finalizada. O áudio já está pronto para ouvir ou baixar.";
+
+  setState(STATES.COMPLETED, completionMessage);
 }
 
 function cleanupStreams() {
@@ -151,45 +581,6 @@ function cleanupStreams() {
   }
 
   cleanupInProgress = false;
-}
-
-function selectSupportedMimeType() {
-  if (typeof MediaRecorder === "undefined") {
-    return "";
-  }
-
-  return (
-    mimeTypePriority.find((mimeType) => MediaRecorder.isTypeSupported(mimeType)) || ""
-  );
-}
-
-function finalizeRecording() {
-  if (recordedBlob) {
-    return;
-  }
-
-  const mimeType = selectedMimeType || recorder?.mimeType || "application/octet-stream";
-  recordedBlob = new Blob(chunks, { type: mimeType });
-  const durationMs = recordingStartedAt ? performance.now() - recordingStartedAt : null;
-
-  updateDiagnostics({
-    blob: recordedBlob,
-    mimeType: recordedBlob.type || mimeType,
-    durationMs,
-  });
-
-  cleanupStreams();
-  recorder = null;
-  activeAudioStream = null;
-  activeDisplayStream = null;
-  recordingStartedAt = null;
-
-  const sourceLabel =
-    stopRequestedBy === "external"
-      ? "A captura foi encerrada pela interface do navegador."
-      : "Gravação finalizada. O Blob foi mantido em memória para as próximas etapas.";
-
-  setState(STATES.COMPLETED, sourceLabel);
 }
 
 function stopRecording(reason = "user") {
@@ -222,6 +613,53 @@ function handleTrackEnded() {
   }
 
   stopRecording("external");
+}
+
+function handlePlaybackPlay() {
+  if (suppressAudioEvents || !recordedBlob) {
+    return;
+  }
+
+  setState(
+    STATES.PLAYBACK,
+    "Reprodução em andamento. Use os controles para pausar ou continuar.",
+    "playback",
+  );
+}
+
+function handlePlaybackPause() {
+  if (suppressAudioEvents || !recordedBlob) {
+    return;
+  }
+
+  setState(
+    STATES.COMPLETED,
+    "Reprodução pausada. O áudio continua disponível para reprodução e download.",
+  );
+}
+
+function handlePlaybackEnded() {
+  if (suppressAudioEvents || !recordedBlob) {
+    return;
+  }
+
+  elements.playbackAudio.currentTime = 0;
+  setState(
+    STATES.COMPLETED,
+    "Reprodução concluída. Você pode ouvir novamente, baixar o áudio ou criar uma nova gravação.",
+  );
+}
+
+function handlePlaybackMetadataLoaded() {
+  if (!recordedBlob) {
+    return;
+  }
+
+  updatePlaybackDurationLabel(elements.playbackAudio.duration);
+}
+
+function resetToIdle() {
+  clearRecordedSession();
 }
 
 async function startCapture() {
@@ -269,17 +707,17 @@ async function startCapture() {
       return;
     }
 
-    resetSessionState();
-    activeAudioStream = new MediaStream(audioTracks);
+    chunks = [];
+    stopRequestedBy = null;
+    recordingStartedAt = performance.now();
+    recordingDurationMs = null;
 
+    activeAudioStream = new MediaStream(audioTracks);
     selectedMimeType = selectSupportedMimeType();
 
     recorder = selectedMimeType
       ? new MediaRecorder(activeAudioStream, { mimeType: selectedMimeType })
       : new MediaRecorder(activeAudioStream);
-
-    chunks = [];
-    recordingStartedAt = performance.now();
 
     recorder.ondataavailable = (event) => {
       if (event.data && event.data.size > 0) {
@@ -320,17 +758,30 @@ async function startCapture() {
   }
 }
 
+function handleDownloadClick(event) {
+  if (!recordedBlob || !recordedObjectUrl) {
+    event.preventDefault();
+  }
+}
+
 function bindEvents() {
   elements.startButton.addEventListener("click", startCapture);
   elements.stopButton.addEventListener("click", () => stopRecording("user"));
+  elements.newRecordingButton.addEventListener("click", resetToIdle);
+  elements.downloadLink.addEventListener("click", handleDownloadClick);
+  elements.uploadButton.addEventListener("click", uploadRecording);
+  elements.playbackAudio.addEventListener("play", handlePlaybackPlay);
+  elements.playbackAudio.addEventListener("pause", handlePlaybackPause);
+  elements.playbackAudio.addEventListener("ended", handlePlaybackEnded);
+  elements.playbackAudio.addEventListener("loadedmetadata", handlePlaybackMetadataLoaded);
+  elements.playbackAudio.addEventListener("durationchange", handlePlaybackMetadataLoaded);
 }
 
 function initialize() {
+  clearPlayerUi();
+  clearUploadUi({ hasRecording: false });
   updateDiagnostics();
-  setState(
-    STATES.IDLE,
-    "Nenhuma captura ativa. Clique em Iniciar captura para escolher uma fonte com áudio.",
-  );
+  setState(STATES.IDLE, DEFAULT_IDLE_MESSAGE);
   bindEvents();
 }
 

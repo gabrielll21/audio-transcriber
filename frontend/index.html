@@ -32,6 +32,75 @@
           <button id="stop-button" type="button" disabled>Parar captura</button>
         </div>
 
+        <section class="playback-panel" id="playback-panel" hidden>
+          <div class="playback-header">
+            <div>
+              <h2>Reprodução</h2>
+              <p id="playback-message">
+                O áudio finalizado aparecerá aqui para reprodução local.
+              </p>
+            </div>
+            <span class="duration-pill" id="playback-duration">-</span>
+          </div>
+
+          <audio
+            id="playback-audio"
+            controls
+            preload="metadata"
+            hidden
+          ></audio>
+
+          <div class="playback-actions">
+            <a
+              id="download-link"
+              class="action-button"
+              href="#"
+              download
+              hidden
+            >
+              Baixar áudio
+            </a>
+            <button id="new-recording-button" type="button" hidden>
+              Nova gravação
+            </button>
+          </div>
+        </section>
+
+        <section class="upload-panel" id="upload-panel" hidden>
+          <div class="upload-header">
+            <div>
+              <h2>Envio</h2>
+              <p id="upload-message">
+                O áudio pode ser enviado para o backend quando estiver pronto.
+              </p>
+            </div>
+            <span class="upload-badge" id="upload-state">UPLOAD_IDLE</span>
+          </div>
+
+          <div class="upload-actions">
+            <button id="upload-button" type="button">Enviar para transcrição</button>
+          </div>
+
+          <dl class="upload-result" id="upload-result" hidden>
+            <div>
+              <dt>ID</dt>
+              <dd id="upload-id">-</dd>
+            </div>
+            <div>
+              <dt>Arquivo</dt>
+              <dd id="upload-filename">-</dd>
+            </div>
+            <div>
+              <dt>Content-Type</dt>
+              <dd id="upload-content-type">-</dd>
+            </div>
+            <div>
+              <dt>Tamanho</dt>
+              <dd id="upload-size">-</dd>
+            </div>
+          </dl>
+        </section>
+
         <section class="diagnostics" aria-label="Diagnóstico da gravação">
           <h2>Diagnóstico</h2>
           <dl>
