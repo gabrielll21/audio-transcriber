@@ -27,6 +27,32 @@
           </p>
         </div>
 
+        <section class="mode-panel" aria-label="Fonte de áudio">
+          <div class="mode-panel-header">
+            <div>
+              <h2>Fonte de áudio</h2>
+              <p>
+                Escolha o que deseja capturar antes de iniciar a gravação.
+              </p>
+            </div>
+          </div>
+
+          <div class="mode-options" role="radiogroup" aria-label="Fonte de áudio">
+            <label class="mode-option">
+              <input type="radio" name="source-mode" value="OUTPUT" checked />
+              <span>Somente saída</span>
+            </label>
+            <label class="mode-option">
+              <input type="radio" name="source-mode" value="INPUT" />
+              <span>Somente entrada</span>
+            </label>
+            <label class="mode-option">
+              <input type="radio" name="source-mode" value="BOTH" />
+              <span>Entrada + saída</span>
+            </label>
+          </div>
+        </section>
+
         <div class="actions">
           <button id="start-button" type="button">Iniciar captura</button>
           <button id="stop-button" type="button" disabled>Parar captura</button>
@@ -37,29 +63,13 @@
             <div>
               <h2>Reprodução</h2>
               <p id="playback-message">
-                O áudio finalizado aparecerá aqui para reprodução local.
+                Os áudios finalizados aparecerão aqui para reprodução local.
               </p>
             </div>
-            <span class="duration-pill" id="playback-duration">-</span>
           </div>
 
-          <audio
-            id="playback-audio"
-            controls
-            preload="metadata"
-            hidden
-          ></audio>
-
+          <div class="source-grid" id="playback-sources"></div>
           <div class="playback-actions">
-            <a
-              id="download-link"
-              class="action-button"
-              href="#"
-              download
-              hidden
-            >
-              Baixar áudio
-            </a>
             <button id="new-recording-button" type="button" hidden>
               Nova gravação
             </button>
@@ -82,48 +92,7 @@
             <button id="upload-button" type="button">Enviar para transcrição</button>
           </div>
 
-          <dl class="upload-result" id="upload-result" hidden>
-            <div>
-              <dt>ID</dt>
-              <dd id="upload-id">-</dd>
-            </div>
-            <div>
-              <dt>Arquivo original</dt>
-              <dd id="upload-original-file">-</dd>
-            </div>
-            <div>
-              <dt>Arquivo processado</dt>
-              <dd id="upload-processed-file">-</dd>
-            </div>
-            <div>
-              <dt>Formato</dt>
-              <dd id="upload-format">-</dd>
-            </div>
-            <div>
-              <dt>Sample rate</dt>
-              <dd id="upload-sample-rate">-</dd>
-            </div>
-            <div>
-              <dt>Canais</dt>
-              <dd id="upload-channels">-</dd>
-            </div>
-            <div>
-              <dt>Content-Type original</dt>
-              <dd id="upload-content-type">-</dd>
-            </div>
-            <div>
-              <dt>Tamanho original</dt>
-              <dd id="upload-size">-</dd>
-            </div>
-            <div>
-              <dt>Tamanho processado</dt>
-              <dd id="upload-processed-size">-</dd>
-            </div>
-            <div>
-              <dt>Content-Type processado</dt>
-              <dd id="upload-processed-content-type">-</dd>
-            </div>
-          </dl>
+          <div class="source-grid" id="upload-result" hidden></div>
         </section>
 
         <section class="transcription-panel" id="transcription-panel" hidden>
@@ -137,25 +106,12 @@
             <span class="transcription-badge" id="transcription-state">-</span>
           </div>
 
-          <pre class="transcription-text" id="transcription-text">-</pre>
+          <div class="source-grid" id="transcription-sources"></div>
         </section>
 
         <section class="diagnostics" aria-label="Diagnóstico da gravação">
           <h2>Diagnóstico</h2>
-          <dl>
-            <div>
-              <dt>Blob</dt>
-              <dd id="blob-size">Sem gravação</dd>
-            </div>
-            <div>
-              <dt>MIME type</dt>
-              <dd id="blob-type">-</dd>
-            </div>
-            <div>
-              <dt>Duração</dt>
-              <dd id="blob-duration">-</dd>
-            </div>
-          </dl>
+          <div class="source-grid" id="diagnostics-sources"></div>
         </section>
 
         <p class="note">
