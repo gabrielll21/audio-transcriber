@@ -15,7 +15,7 @@ const DEFAULT_PLAYBACK_MESSAGE =
   "O áudio finalizado aparecerá aqui para reprodução local.";
 
 const DEFAULT_UPLOAD_MESSAGE =
-  "O áudio pode ser enviado para o backend para padronização.";
+  "O áudio pode ser enviado para o backend para processamento e transcrição.";
 
 const UPLOAD_ENDPOINT = "http://127.0.0.1:8000/api/audio";
 const UPLOAD_TIMEOUT_MS = 30000;
@@ -23,6 +23,8 @@ const UPLOAD_TIMEOUT_MS = 30000;
 const UPLOAD_STATES = {
   UPLOAD_IDLE: "UPLOAD_IDLE",
   UPLOAD_LOADING: "UPLOAD_LOADING",
+  UPLOAD_PROCESSING: "UPLOAD_PROCESSING",
+  UPLOAD_TRANSCRIBING: "UPLOAD_TRANSCRIBING",
   UPLOAD_SUCCESS: "UPLOAD_SUCCESS",
   UPLOAD_ERROR: "UPLOAD_ERROR",
 };
@@ -58,6 +60,10 @@ const elements = {
   uploadProcessedContentType: document.getElementById(
     "upload-processed-content-type",
   ),
+  transcriptionPanel: document.getElementById("transcription-panel"),
+  transcriptionMessage: document.getElementById("transcription-message"),
+  transcriptionState: document.getElementById("transcription-state"),
+  transcriptionText: document.getElementById("transcription-text"),
 };
 
 const mimeTypePriority = [
@@ -86,6 +92,7 @@ let suppressAudioEvents = false;
 let uploadState = UPLOAD_STATES.UPLOAD_IDLE;
 let uploadAbortController = null;
 let uploadTimeoutId = null;
+let uploadStageTimeoutIds = [];
 let uploadTimedOut = false;
 
 function formatApproxDuration(milliseconds) {
@@ -247,10 +254,17 @@ function formatUploadSize(bytes) {
 function setUploadState(nextState, message, type = "info") {
   uploadState = nextState;
   elements.uploadState.textContent = nextState;
-  elements.uploadState.classList.remove("is-loading", "is-success", "is-error");
+  elements.uploadState.classList.remove(
+    "is-loading",
+    "is-transcribing",
+    "is-success",
+    "is-error",
+  );
 
   if (type === "loading") {
     elements.uploadState.classList.add("is-loading");
+  } else if (type === "transcribing") {
+    elements.uploadState.classList.add("is-transcribing");
   } else if (type === "success") {
     elements.uploadState.classList.add("is-success");
   } else if (type === "error") {
@@ -261,7 +275,22 @@ function setUploadState(nextState, message, type = "info") {
     elements.uploadMessage.textContent = message;
   }
 
-  elements.uploadButton.disabled = nextState === UPLOAD_STATES.UPLOAD_LOADING || !recordedBlob;
+  elements.uploadButton.disabled =
+    isUploadBusyState(nextState) || !recordedBlob;
+}
+
+function isUploadBusyState(state) {
+  return [
+    UPLOAD_STATES.UPLOAD_LOADING,
+    UPLOAD_STATES.UPLOAD_PROCESSING,
+    UPLOAD_STATES.UPLOAD_TRANSCRIBING,
+  ].includes(state);
+}
+
+function clearUploadStageTimers() {
+  while (uploadStageTimeoutIds.length > 0) {
+    clearTimeout(uploadStageTimeoutIds.pop());
+  }
 }
 
 function clearUploadResult() {
@@ -278,15 +307,25 @@ function clearUploadResult() {
   elements.uploadProcessedContentType.textContent = "-";
 }
 
+function clearTranscriptionResult() {
+  elements.transcriptionPanel.hidden = true;
+  elements.transcriptionState.textContent = "-";
+  elements.transcriptionText.textContent = "-";
+  elements.transcriptionMessage.textContent =
+    "A transcrição retornada pelo backend aparecerá aqui.";
+}
+
 function clearUploadUi({ hidePanel = true, hasRecording = false } = {}) {
   if (uploadTimeoutId) {
     clearTimeout(uploadTimeoutId);
     uploadTimeoutId = null;
   }
 
+  clearUploadStageTimers();
   uploadAbortController = null;
   uploadTimedOut = false;
   clearUploadResult();
+  clearTranscriptionResult();
 
   if (hidePanel) {
     elements.uploadPanel.hidden = true;
@@ -300,10 +339,11 @@ function clearUploadUi({ hidePanel = true, hasRecording = false } = {}) {
 function prepareUploadUi() {
   elements.uploadPanel.hidden = false;
   clearUploadResult();
+  clearTranscriptionResult();
   elements.uploadButton.disabled = false;
   setUploadState(
     UPLOAD_STATES.UPLOAD_IDLE,
-    "Áudio pronto para enviar e padronizar.",
+    "Áudio pronto para enviar, processar e transcrever.",
   );
 }
 
@@ -324,6 +364,16 @@ function renderUploadResult(payload) {
     payload.processed_content_type || "-";
 }
 
+function renderTranscriptionResult(text) {
+  const normalizedText = typeof text === "string" ? text.trim() : "";
+
+  elements.transcriptionPanel.hidden = false;
+  elements.transcriptionState.textContent = "READY";
+  elements.transcriptionMessage.textContent =
+    "A transcrição concluída pelo backend está disponível abaixo.";
+  elements.transcriptionText.textContent = normalizedText || "-";
+}
+
 function getUploadErrorMessage(status, payload) {
   const backendMessage =
     payload && typeof payload.message === "string" ? payload.message.trim() : "";
@@ -340,9 +390,9 @@ function getUploadErrorMessage(status, payload) {
     case 415:
       return "O formato de áudio enviado não é aceito pelo backend.";
     case 503:
-      return "O processamento depende do FFmpeg instalado no backend.";
+      return "O backend não conseguiu disponibilizar o processamento ou a transcrição.";
     case 500:
-      return "O backend encontrou um erro ao processar o áudio.";
+      return "O backend encontrou um erro ao processar ou transcrever o áudio.";
     default:
       return "O upload falhou. Tente novamente.";
   }
@@ -386,6 +436,7 @@ async function uploadRecording() {
   const formData = new FormData();
   formData.append("file", recordedBlob, fileName);
 
+  clearUploadStageTimers();
   uploadAbortController = new AbortController();
   uploadTimedOut = false;
   uploadTimeoutId = window.setTimeout(() => {
@@ -399,6 +450,34 @@ async function uploadRecording() {
     "loading",
   );
   elements.uploadResult.hidden = true;
+  clearTranscriptionResult();
+
+  uploadStageTimeoutIds.push(
+    window.setTimeout(() => {
+      if (uploadState === UPLOAD_STATES.UPLOAD_LOADING) {
+        setUploadState(
+          UPLOAD_STATES.UPLOAD_PROCESSING,
+          "Processando áudio no backend...",
+          "loading",
+        );
+      }
+    }, 350),
+  );
+
+  uploadStageTimeoutIds.push(
+    window.setTimeout(() => {
+      if (
+        uploadState === UPLOAD_STATES.UPLOAD_LOADING ||
+        uploadState === UPLOAD_STATES.UPLOAD_PROCESSING
+      ) {
+        setUploadState(
+          UPLOAD_STATES.UPLOAD_TRANSCRIBING,
+          "Transcrevendo áudio no backend...",
+          "transcribing",
+        );
+      }
+    }, 1200),
+  );
 
   try {
     const responsePromise = fetch(UPLOAD_ENDPOINT, {
@@ -446,10 +525,20 @@ async function uploadRecording() {
       return;
     }
 
+    if (typeof payload.text !== "string" || !payload.text.trim()) {
+      setUploadState(
+        UPLOAD_STATES.UPLOAD_ERROR,
+        "A transcrição recebida pelo backend está vazia.",
+        "error",
+      );
+      return;
+    }
+
     renderUploadResult(payload);
+    renderTranscriptionResult(payload.text);
     setUploadState(
       UPLOAD_STATES.UPLOAD_SUCCESS,
-      "Processamento concluído. O áudio padronizado está pronto.",
+      "Transcrição concluída.",
       "success",
     );
   } catch (error) {
@@ -463,6 +552,7 @@ async function uploadRecording() {
       clearTimeout(uploadTimeoutId);
       uploadTimeoutId = null;
     }
+    clearUploadStageTimers();
     uploadAbortController = null;
     uploadTimedOut = false;
   }

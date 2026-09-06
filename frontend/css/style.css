@@ -292,6 +292,12 @@ audio:focus-visible {
   color: #9f1f1f;
 }
 
+.upload-badge.is-transcribing,
+.transcription-badge {
+  background: #e7e2ff;
+  color: #4b2bbf;
+}
+
 .upload-actions {
   display: flex;
   flex-wrap: wrap;
@@ -332,6 +338,57 @@ audio:focus-visible {
   text-align: right;
   color: #122033;
   word-break: break-word;
+}
+
+.transcription-panel {
+  margin-top: 20px;
+  padding: 20px;
+  border: 1px solid rgba(18, 32, 51, 0.08);
+  border-radius: 18px;
+  background: #f7f9fe;
+}
+
+.transcription-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.transcription-header h2 {
+  margin: 0;
+  font-size: 1rem;
+  color: #18314f;
+}
+
+.transcription-header p {
+  margin: 6px 0 0;
+  color: #5d6b82;
+  line-height: 1.5;
+}
+
+.transcription-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 132px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.transcription-text {
+  margin: 18px 0 0;
+  padding: 16px;
+  border-radius: 14px;
+  background: #eef3fb;
+  color: #122033;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.65;
+  min-height: 88px;
 }
 
 .diagnostics {
@@ -411,5 +468,9 @@ audio:focus-visible {
 
   .upload-result dd {
     text-align: left;
+  }
+
+  .transcription-header {
+    flex-direction: column;
   }
 }

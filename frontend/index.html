@@ -69,9 +69,10 @@
         <section class="upload-panel" id="upload-panel" hidden>
           <div class="upload-header">
             <div>
-              <h2>Processamento</h2>
+              <h2>Processamento e transcrição</h2>
               <p id="upload-message">
-                O áudio pode ser enviado para o backend para padronização.
+                O áudio pode ser enviado para o backend para processamento e
+                transcrição.
               </p>
             </div>
             <span class="upload-badge" id="upload-state">UPLOAD_IDLE</span>
@@ -123,6 +124,20 @@
               <dd id="upload-processed-content-type">-</dd>
             </div>
           </dl>
+        </section>
+
+        <section class="transcription-panel" id="transcription-panel" hidden>
+          <div class="transcription-header">
+            <div>
+              <h2>Transcrição</h2>
+              <p id="transcription-message">
+                A transcrição retornada pelo backend aparecerá aqui.
+              </p>
+            </div>
+            <span class="transcription-badge" id="transcription-state">-</span>
+          </div>
+
+          <pre class="transcription-text" id="transcription-text">-</pre>
         </section>
 
         <section class="diagnostics" aria-label="Diagnóstico da gravação">
