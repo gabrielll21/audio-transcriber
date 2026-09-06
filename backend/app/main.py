@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from cgi import FieldStorage
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import logging
 from json import dumps
 from pathlib import Path
 from typing import ClassVar
@@ -12,6 +13,21 @@ from .audio_processing import (
     FfmpegUnavailableError,
     process_audio_file,
 )
+from .transcriber import (
+    TranscriptionError,
+    TranscriptionUnavailableError,
+    transcribe_processed_audio,
+)
+
+
+if not logging.getLogger().handlers:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+
+
+logger = logging.getLogger(__name__)
 
 
 ALLOWED_ORIGINS = {
@@ -146,11 +162,36 @@ class AudioTranscriberHandler(BaseHTTPRequestHandler):
             )
             return
 
+        try:
+            transcription = transcribe_processed_audio(processed_path)
+        except TranscriptionUnavailableError:
+            self._send_json(
+                503,
+                {
+                    "status": "error",
+                    "message": (
+                        "O mecanismo de transcrição depende do faster-whisper instalado no backend."
+                    ),
+                },
+            )
+            return
+        except TranscriptionError as error:
+            self._send_json(
+                500,
+                {
+                    "status": "error",
+                    "message": str(error) or "Não foi possível transcrever o áudio.",
+                },
+            )
+            return
+
+        logger.info("Transcrição finalizada com sucesso para upload %s.", upload_id)
+
         self._send_json(
             201,
             {
                 "id": upload_id,
-                "status": "processed",
+                "status": "transcribed",
                 "original_file": destination.name,
                 "processed_file": processed_path.name,
                 "contentType": normalized_content_type,
@@ -160,6 +201,7 @@ class AudioTranscriberHandler(BaseHTTPRequestHandler):
                 "sample_rate": 16000,
                 "channels": 1,
                 "processed_content_type": "audio/wav",
+                "text": transcription.text,
             },
         )
 
