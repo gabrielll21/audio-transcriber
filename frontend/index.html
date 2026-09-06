@@ -10,9 +10,49 @@
     <main class="page">
       <section class="card">
         <p class="eyebrow">Audio Transcriber</p>
-        <h1>Frontend inicial funcionando.</h1>
-        <p class="message" id="status-message">
-          Estrutura base pronta para evoluir em sprints futuras.
+        <h1>Captura de áudio no navegador</h1>
+        <p class="lead">
+          Teste a captura de áudio do navegador para validar permissões, a
+          fonte escolhida e a gravação local em memória.
+        </p>
+
+        <div class="status-panel" aria-live="polite">
+          <div class="status-line">
+            <span class="status-label">Estado</span>
+            <span class="status-badge" id="capture-state">IDLE</span>
+          </div>
+          <p class="message" id="status-message">
+            Nenhuma captura ativa. Clique em Iniciar captura para escolher uma
+            fonte com áudio.
+          </p>
+        </div>
+
+        <div class="actions">
+          <button id="start-button" type="button">Iniciar captura</button>
+          <button id="stop-button" type="button" disabled>Parar captura</button>
+        </div>
+
+        <section class="diagnostics" aria-label="Diagnóstico da gravação">
+          <h2>Diagnóstico</h2>
+          <dl>
+            <div>
+              <dt>Blob</dt>
+              <dd id="blob-size">Sem gravação</dd>
+            </div>
+            <div>
+              <dt>MIME type</dt>
+              <dd id="blob-type">-</dd>
+            </div>
+            <div>
+              <dt>Duração</dt>
+              <dd id="blob-duration">-</dd>
+            </div>
+          </dl>
+        </section>
+
+        <p class="note">
+          A captura depende do suporte do navegador e da fonte selecionada.
+          Algumas seleções podem não fornecer áudio.
         </p>
       </section>
     </main>
