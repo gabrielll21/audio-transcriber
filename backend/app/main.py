@@ -7,6 +7,12 @@ from pathlib import Path
 from typing import ClassVar
 from uuid import uuid4
 
+from .audio_processing import (
+    AudioProcessingError,
+    FfmpegUnavailableError,
+    process_audio_file,
+)
+
 
 ALLOWED_ORIGINS = {
     "http://127.0.0.1:8001",
@@ -117,14 +123,43 @@ class AudioTranscriberHandler(BaseHTTPRequestHandler):
             )
             return
 
+        try:
+            processed_path = process_audio_file(destination)
+        except FfmpegUnavailableError:
+            self._send_json(
+                503,
+                {
+                    "status": "error",
+                    "message": (
+                        "O processamento depende do FFmpeg instalado no backend."
+                    ),
+                },
+            )
+            return
+        except AudioProcessingError as error:
+            self._send_json(
+                500,
+                {
+                    "status": "error",
+                    "message": str(error) or "Não foi possível processar o áudio.",
+                },
+            )
+            return
+
         self._send_json(
             201,
             {
                 "id": upload_id,
-                "filename": destination.name,
+                "status": "processed",
+                "original_file": destination.name,
+                "processed_file": processed_path.name,
                 "contentType": normalized_content_type,
-                "size": size,
-                "status": "uploaded",
+                "original_size": size,
+                "processed_size": processed_path.stat().st_size,
+                "format": "wav",
+                "sample_rate": 16000,
+                "channels": 1,
+                "processed_content_type": "audio/wav",
             },
         )
 

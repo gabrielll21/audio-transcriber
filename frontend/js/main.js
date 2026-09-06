@@ -15,7 +15,7 @@ const DEFAULT_PLAYBACK_MESSAGE =
   "O áudio finalizado aparecerá aqui para reprodução local.";
 
 const DEFAULT_UPLOAD_MESSAGE =
-  "O áudio pode ser enviado para o backend quando estiver pronto.";
+  "O áudio pode ser enviado para o backend para padronização.";
 
 const UPLOAD_ENDPOINT = "http://127.0.0.1:8000/api/audio";
 const UPLOAD_TIMEOUT_MS = 30000;
@@ -47,9 +47,17 @@ const elements = {
   uploadMessage: document.getElementById("upload-message"),
   uploadResult: document.getElementById("upload-result"),
   uploadId: document.getElementById("upload-id"),
-  uploadFilename: document.getElementById("upload-filename"),
+  uploadOriginalFile: document.getElementById("upload-original-file"),
+  uploadProcessedFile: document.getElementById("upload-processed-file"),
+  uploadFormat: document.getElementById("upload-format"),
+  uploadSampleRate: document.getElementById("upload-sample-rate"),
+  uploadChannels: document.getElementById("upload-channels"),
   uploadContentType: document.getElementById("upload-content-type"),
   uploadSize: document.getElementById("upload-size"),
+  uploadProcessedSize: document.getElementById("upload-processed-size"),
+  uploadProcessedContentType: document.getElementById(
+    "upload-processed-content-type",
+  ),
 };
 
 const mimeTypePriority = [
@@ -259,9 +267,15 @@ function setUploadState(nextState, message, type = "info") {
 function clearUploadResult() {
   elements.uploadResult.hidden = true;
   elements.uploadId.textContent = "-";
-  elements.uploadFilename.textContent = "-";
+  elements.uploadOriginalFile.textContent = "-";
+  elements.uploadProcessedFile.textContent = "-";
+  elements.uploadFormat.textContent = "-";
+  elements.uploadSampleRate.textContent = "-";
+  elements.uploadChannels.textContent = "-";
   elements.uploadContentType.textContent = "-";
   elements.uploadSize.textContent = "-";
+  elements.uploadProcessedSize.textContent = "-";
+  elements.uploadProcessedContentType.textContent = "-";
 }
 
 function clearUploadUi({ hidePanel = true, hasRecording = false } = {}) {
@@ -289,16 +303,25 @@ function prepareUploadUi() {
   elements.uploadButton.disabled = false;
   setUploadState(
     UPLOAD_STATES.UPLOAD_IDLE,
-    "Áudio pronto para enviar para transcrição.",
+    "Áudio pronto para enviar e padronizar.",
   );
 }
 
 function renderUploadResult(payload) {
   elements.uploadResult.hidden = false;
   elements.uploadId.textContent = payload.id || "-";
-  elements.uploadFilename.textContent = payload.filename || "-";
+  elements.uploadOriginalFile.textContent = payload.original_file || "-";
+  elements.uploadProcessedFile.textContent = payload.processed_file || "-";
+  elements.uploadFormat.textContent = payload.format || "-";
+  elements.uploadSampleRate.textContent = payload.sample_rate
+    ? `${payload.sample_rate} Hz`
+    : "-";
+  elements.uploadChannels.textContent = payload.channels ? String(payload.channels) : "-";
   elements.uploadContentType.textContent = payload.contentType || "-";
-  elements.uploadSize.textContent = formatUploadSize(Number(payload.size));
+  elements.uploadSize.textContent = formatUploadSize(Number(payload.original_size));
+  elements.uploadProcessedSize.textContent = formatUploadSize(Number(payload.processed_size));
+  elements.uploadProcessedContentType.textContent =
+    payload.processed_content_type || "-";
 }
 
 function getUploadErrorMessage(status, payload) {
@@ -316,8 +339,10 @@ function getUploadErrorMessage(status, payload) {
       return "O arquivo enviado excede o limite permitido de 50 MB.";
     case 415:
       return "O formato de áudio enviado não é aceito pelo backend.";
+    case 503:
+      return "O processamento depende do FFmpeg instalado no backend.";
     case 500:
-      return "O backend encontrou um erro interno ao salvar o arquivo.";
+      return "O backend encontrou um erro ao processar o áudio.";
     default:
       return "O upload falhou. Tente novamente.";
   }
@@ -376,11 +401,15 @@ async function uploadRecording() {
   elements.uploadResult.hidden = true;
 
   try {
-    const response = await fetch(UPLOAD_ENDPOINT, {
+    const responsePromise = fetch(UPLOAD_ENDPOINT, {
       method: "POST",
       body: formData,
       signal: uploadAbortController.signal,
     });
+
+    elements.uploadMessage.textContent = "Processando áudio no backend...";
+
+    const response = await responsePromise;
 
     if (uploadTimeoutId) {
       clearTimeout(uploadTimeoutId);
@@ -420,7 +449,7 @@ async function uploadRecording() {
     renderUploadResult(payload);
     setUploadState(
       UPLOAD_STATES.UPLOAD_SUCCESS,
-      "Áudio enviado com sucesso.",
+      "Processamento concluído. O áudio padronizado está pronto.",
       "success",
     );
   } catch (error) {

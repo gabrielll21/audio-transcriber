@@ -69,9 +69,9 @@
         <section class="upload-panel" id="upload-panel" hidden>
           <div class="upload-header">
             <div>
-              <h2>Envio</h2>
+              <h2>Processamento</h2>
               <p id="upload-message">
-                O áudio pode ser enviado para o backend quando estiver pronto.
+                O áudio pode ser enviado para o backend para padronização.
               </p>
             </div>
             <span class="upload-badge" id="upload-state">UPLOAD_IDLE</span>
@@ -87,16 +87,40 @@
               <dd id="upload-id">-</dd>
             </div>
             <div>
-              <dt>Arquivo</dt>
-              <dd id="upload-filename">-</dd>
+              <dt>Arquivo original</dt>
+              <dd id="upload-original-file">-</dd>
             </div>
             <div>
-              <dt>Content-Type</dt>
+              <dt>Arquivo processado</dt>
+              <dd id="upload-processed-file">-</dd>
+            </div>
+            <div>
+              <dt>Formato</dt>
+              <dd id="upload-format">-</dd>
+            </div>
+            <div>
+              <dt>Sample rate</dt>
+              <dd id="upload-sample-rate">-</dd>
+            </div>
+            <div>
+              <dt>Canais</dt>
+              <dd id="upload-channels">-</dd>
+            </div>
+            <div>
+              <dt>Content-Type original</dt>
               <dd id="upload-content-type">-</dd>
             </div>
             <div>
-              <dt>Tamanho</dt>
+              <dt>Tamanho original</dt>
               <dd id="upload-size">-</dd>
+            </div>
+            <div>
+              <dt>Tamanho processado</dt>
+              <dd id="upload-processed-size">-</dd>
+            </div>
+            <div>
+              <dt>Content-Type processado</dt>
+              <dd id="upload-processed-content-type">-</dd>
             </div>
           </dl>
         </section>
