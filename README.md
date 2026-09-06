@@ -1,362 +1,443 @@
 # Audio Transcriber
 
-Audio Transcriber e uma aplicacao web para capturar audio no navegador, enviar o arquivo para um backend e gerar transcricoes com Whisper ou faster-whisper.
+Aplicação web MVP para capturar áudio diretamente no navegador, enviar o arquivo para um backend em Python, processar o áudio com FFmpeg e gerar transcrições com `faster-whisper`.
 
-O objetivo do projeto e permitir uso direto pelo navegador, sem exigir que o usuario instale ferramentas locais de captura de audio como sounddevice, PipeWire, PulseAudio, ALSA ou pactl. A captura deve acontecer via APIs web apropriadas, e o processamento pesado deve ficar no backend.
+O projeto foi desenhado como **web-first**: a captura acontece no navegador e o backend centraliza validação, normalização e transcrição.
 
-## Visao geral
+## Status
 
-Fluxo planejado:
+**MVP funcional**
 
-```text
-Usuario
-  -> Frontend web
-  -> Captura de audio no navegador
-  -> Gravacao
-  -> Upload para API
-  -> Backend
-  -> Processamento e conversao
-  -> Whisper / faster-whisper
-  -> Transcricao
-  -> TXT / SRT
-  -> Download pelo usuario
+O repositório já entrega um fluxo utilizável para:
+
+- escolher a fonte de captura no navegador;
+- gravar áudio de entrada, saída ou ambas as fontes separadamente;
+- reproduzir e baixar o áudio capturado;
+- enviar o áudio para o backend;
+- processar o áudio para WAV 16 kHz mono PCM S16LE;
+- transcrever o áudio com `faster-whisper`;
+- retornar o resultado em JSON;
+- validar entradas e tratar erros comuns;
+- executar testes automatizados.
+
+Isso ainda **não** é um produto pronto para produção. Falta persistência, autenticação, histórico, exportações e endurecimento operacional.
+
+## Sobre o projeto
+
+O Audio Transcriber resolve um problema simples: capturar áudio de forma compatível com a web, sem depender de ferramentas locais de captura como `sounddevice`, `PipeWire`, `PulseAudio`, `ALSA` ou `pactl`.
+
+A proposta é permitir que o usuário grave áudio diretamente no navegador, visualize o resultado, envie o arquivo para o backend e receba uma transcrição pronta para uso.
+
+A arquitetura atual divide responsabilidades assim:
+
+- **Frontend**: interface, escolha do modo de captura, gravação com APIs do navegador, reprodução, download, upload e exibição dos resultados.
+- **Backend**: API HTTP, validação dos uploads, armazenamento temporário, processamento com FFmpeg e transcrição com `faster-whisper`.
+- **FFmpeg**: normaliza o áudio para o formato usado pelo pipeline de transcrição.
+- **faster-whisper**: executa a transcrição no backend, usando o modelo `tiny` por padrão em CPU.
+
+Os arquivos recebidos são salvos temporariamente em `backend/temp/uploads/` e os WAV processados em `backend/temp/processed/`. Esses diretórios são criados em runtime e permanecem fora do Git.
+
+A captura no navegador foi escolhida porque o projeto é web-first e precisa funcionar sem depender do ambiente de áudio do computador do usuário. Isso reduz acoplamento com o sistema operacional e mantém o fluxo compatível com diferentes máquinas e navegadores, dentro das limitações das APIs web.
+
+## Funcionalidades
+
+### Captura
+
+- [x] Captura de áudio de saída
+- [x] Captura de áudio de entrada
+- [x] Captura de entrada + saída
+- [x] Gravação através do navegador
+- [x] Detecção/tratamento de ausência de áudio
+- [x] Tratamento de cancelamento de permissão
+
+### Áudio
+
+- [x] Reprodução da gravação
+- [x] Download do áudio
+- [x] Upload para o backend
+- [x] Validação de formato
+- [x] Limite de tamanho
+
+### Processamento
+
+- [x] Processamento com FFmpeg
+- [x] Conversão para WAV
+- [x] 16 kHz
+- [x] Mono
+- [x] PCM signed 16-bit little-endian
+
+### Transcrição
+
+- [x] `faster-whisper`
+- [x] Transcrição no backend
+- [x] Processamento separado das fontes de áudio quando aplicável
+
+### Qualidade
+
+- [x] Testes automatizados
+- [x] Tratamento de erros
+- [x] Validações de entrada
+
+## Como funciona
+
+```mermaid
+flowchart TD
+    A[Usuário] --> B[Frontend Web]
+    B --> C[Captura de áudio]
+    C --> D[MediaRecorder]
+    D --> E[Upload HTTP]
+    E --> F[Backend Python]
+    F --> G[FFmpeg]
+    G --> H[faster-whisper]
+    H --> I[Transcrição JSON]
+    I --> B
 ```
 
-## Principios de arquitetura
+Fluxo principal:
 
-- A captura de audio nao depende do computador do usuario.
-- O navegador e responsavel por gravar audio dentro das permissões disponiveis.
-- O backend e responsavel por validacao, processamento, conversao e transcricao.
-- A aplicacao deve buscar compatibilidade com Windows, Linux, macOS e navegadores modernos.
-- Nao e possivel prometer compatibilidade absoluta com todo dispositivo ou navegador, porque as capacidades de captura dependem do navegador, do sistema operacional e das permissoes concedidas.
+1. O usuário escolhe o modo de captura no frontend.
+2. O navegador solicita as permissões necessárias e cria um `MediaStream`.
+3. O `MediaRecorder` grava a fonte selecionada.
+4. O áudio resultante fica em memória no navegador, com reprodução e download locais.
+5. Ao enviar, o frontend monta um `multipart/form-data` e chama `POST /api/audio`.
+6. O backend salva o arquivo em diretório temporário, valida MIME type e tamanho, processa com FFmpeg e converte para WAV padronizado.
+7. O backend transcreve o WAV com `faster-whisper` e retorna o texto em JSON.
 
-## Stack planejada
+No modo **Entrada + saída**, as duas fontes são capturadas e processadas separadamente. Elas não são misturadas antes da transcrição, para preservar a origem de cada áudio.
 
-### Frontend
+### Modos de captura
 
-- HTML, CSS e JavaScript inicialmente, ou a tecnologia escolhida durante o desenvolvimento
-- APIs nativas do navegador para captura de audio
-- MediaRecorder e APIs relacionadas quando apropriado
+- **OUTPUT**: captura o áudio proveniente da aba, janela ou tela compartilhada pelo navegador.
+- **INPUT**: captura o áudio do microfone.
+- **BOTH**: captura entrada e saída em fluxos separados, processando cada fonte de forma independente.
 
-### Backend
+O funcionamento depende das permissões e capacidades do navegador e do sistema operacional. O projeto não promete compatibilidade universal para captura de áudio de saída.
 
-- Python
-- API HTTP/REST
-- faster-whisper para transcricao
-- FFmpeg para processamento e conversao quando necessario
+### Responsabilidade de cada camada
 
-### Banco de dados
+**Frontend**
 
-- PostgreSQL, quando a persistencia for implementada
+- interface;
+- seleção do modo de captura;
+- gravação no navegador;
+- reprodução e download;
+- upload do áudio;
+- exibição do estado, diagnóstico e transcrição.
 
-### Infraestrutura
+**Backend**
 
-- Docker
-- Docker Compose
-- Deploy em producao posteriormente
+- API HTTP;
+- validação do multipart;
+- armazenamento temporário;
+- processamento com FFmpeg;
+- transcrição com `faster-whisper`;
+- resposta JSON.
 
-## Estado atual
+**FFmpeg**
 
-O projeto ainda esta no inicio. O historico registra a inicializacao do repositorio e experimentos tecnicos anteriores relacionados a captura local de audio. Esses experimentos ajudam a entender o ponto de partida, mas nao definem a arquitetura alvo do produto.
+- converte o áudio de entrada para o formato padrão do pipeline: WAV, PCM S16LE, 16 kHz, mono.
 
-O direcionamento atual e web-first:
+**faster-whisper**
 
-- a captura final deve acontecer no navegador;
-- o backend deve receber o audio e processar a transcricao;
-- a solucao nao deve depender de configuracoes locais de audio do usuario.
+- carrega o modelo `tiny`;
+- executa a transcrição em CPU com `compute_type="int8"` por padrão;
+- reutiliza o modelo carregado em memória.
 
-Neste momento, a aplicacao final ainda nao tem o fluxo completo de gravacao no navegador, upload, processamento e exportacao implementado.
+## Tecnologias utilizadas
 
-## O que ja existe
+| Tecnologia | Utilização |
+| --- | --- |
+| HTML | Estrutura do frontend |
+| CSS | Estilização da interface |
+| JavaScript | Captura no navegador, reprodução, upload e renderização dos resultados |
+| Python | Backend HTTP e lógica de processamento |
+| `http.server` | Servidor HTTP simples do backend |
+| FFmpeg | Processamento e normalização de áudio |
+| `faster-whisper` | Transcrição no backend |
+| `unittest` | Testes automatizados |
 
-- Inicializacao do projeto no Git.
-- Historico de experimentacao tecnica com captura local de audio.
+## Estrutura do projeto
 
-## O que ainda nao esta concluido
-
-- Captura de audio pelo navegador
-- Upload para a API
-- Processamento com FFmpeg
-- Transcricao com Whisper / faster-whisper
-- Exportacao de TXT
-- Exportacao de SRT
-- Interface final
-- Historico de transcricoes
-- Autenticacao
-- Limites de seguranca e uso
-- Docker e deploy de producao
-
-## Roadmap por sprints
-
-### Sprint 1 - Estrutura do projeto
-
-Objetivo: preparar a base da aplicacao web com frontend e backend.
-
-- Organizar o repositorio
-- Criar frontend
-- Criar backend
-- Configurar estrutura inicial
-- Criar README
-- Definir arquitetura inicial
-- Configurar ambiente de desenvolvimento
-
-Status: EM DESENVOLVIMENTO
-
-### Sprint 2 - Captura de audio no navegador
-
-Objetivo: permitir que o usuario grave audio diretamente pelo navegador.
-
-- Interface inicial
-- Botao para iniciar gravacao
-- Solicitacao de permissao
-- Captura de audio
-- Botao para parar gravacao
-- Armazenamento temporario da gravacao
-- Tratamento de permissoes
-- Tratamento de erros
-- Testes em diferentes navegadores
-
-Status: PLANEJADO
-
-### Sprint 3 - Reproducao e exportacao
-
-Objetivo: permitir que o usuario confira a gravacao antes de enviar.
-
-- Player de audio
-- Mostrar duracao
-- Reproduzir gravacao
-- Refazer gravacao
-- Baixar audio localmente
-- Definir formato adequado
-
-Status: PLANEJADO
-
-### Sprint 4 - API de upload
-
-Objetivo: enviar a gravacao do navegador para o backend.
-
-- Endpoint de upload
-- multipart/form-data
-- Validacao do arquivo
-- Limite de tamanho
-- Validacao de formato
-- Armazenamento temporario
-- Resposta da API
-
-Status: PLANEJADO
-
-### Sprint 5 - Processamento de audio
-
-Objetivo: preparar o audio recebido para a transcricao.
-
-- Integracao com FFmpeg
-- Conversao de formatos
-- Normalizacao do audio
-- Preparacao para Whisper
-- Limpeza de arquivos temporarios
-
-Status: PLANEJADO
-
-### Sprint 6 - Transcricao com Whisper
-
-Objetivo: transformar o audio em texto.
-
-- Integrar faster-whisper
-- Carregar modelo
-- Processar audio
-- Gerar transcricao
-- Retornar resultado pela API
-- Tratamento de erros
-- Medicao do processamento
-
-Status: PLANEJADO
-
-### Sprint 7 - Idiomas
-
-Objetivo: permitir transcricao em diferentes idiomas.
-
-- Detecao automatica de idioma
-- Selecao manual de idioma
-- Envio do idioma para API
-- Retorno do idioma detectado
-
-Status: PLANEJADO
-
-### Sprint 8 - Exportacao TXT
-
-Objetivo: permitir que o usuario baixe a transcricao.
-
-- Gerar TXT
-- Download
-- Copiar texto
-- Nome automatico do arquivo
-
-Status: PLANEJADO
-
-### Sprint 9 - SRT e timestamps
-
-Objetivo: gerar legendas sincronizadas.
-
-- Capturar timestamps
-- Gerar formato SRT
-- Download SRT
-- Formatar timestamps corretamente
-
-Status: PLANEJADO
-
-### Sprint 10 - Interface profissional
-
-Objetivo: transformar o prototipo em uma aplicacao agradavel de usar.
-
-- Landing page
-- Interface de transcricao
-- Loading
-- Progresso
-- Estados de erro
-- Empty states
-- Responsividade
-- Dark mode
-- Melhorias de UX
-
-Status: PLANEJADO
-
-### Sprint 11 - Historico
-
-Objetivo: permitir que usuarios acessem transcricoes anteriores.
-
-- Persistencia no banco
-- Historico
-- Visualizacao
-- Exclusao
-- Download novamente
-
-Status: PLANEJADO
-
-### Sprint 12 - Autenticacao
-
-Objetivo: adicionar contas de usuario.
-
-- Cadastro
-- Login
-- Logout
-- Autenticacao
-- Protecao dos endpoints
-- Associacao das transcricoes ao usuario
-
-Status: PLANEJADO
-
-### Sprint 13 - Seguranca e limites
-
-Objetivo: preparar a aplicacao para uso publico.
-
-- Limite de tamanho
-- Limite de duracao
-- Rate limiting
-- Validacao de arquivos
-- Sanitizacao
-- Timeout de processamento
-- Limpeza automatica
-- Limites por usuario ou IP
-
-Status: PLANEJADO
-
-### Sprint 14 - Docker
-
-Objetivo: padronizar o ambiente de execucao.
-
-- Dockerfile
-- Docker Compose
-- Backend
-- Frontend
-- PostgreSQL
-- FFmpeg
-- Variaveis de ambiente
-- Healthchecks
-- Logs
-
-Status: PLANEJADO
-
-### Sprint 15 - Deploy
-
-Objetivo: disponibilizar o sistema na internet.
-
-- Deploy do frontend
-- Deploy do backend
-- Banco de producao
-- HTTPS
-- CORS
-- Dominio
-- Variaveis de ambiente
-- Testes externos
-
-Status: PLANEJADO
-
-### Sprint 16 - Polimento
-
-Objetivo: preparar a primeira versao publica.
-
-- Correcao de bugs
-- Melhorias de UX
-- Testes em diferentes dispositivos
-- Testes em diferentes navegadores
-- Testes com arquivos grandes
-- Tratamento de falhas de conexao
-- Documentacao da API
-- Melhorias no README
-
-Status: PLANEJADO
-
-## Estrategia de commits
-
-O projeto segue Conventional Commits.
-
-Exemplos:
-
-- `feat: nova funcionalidade`
-- `fix: correcao de bug`
-- `refactor: refatoracao`
-- `style: alteracoes visuais ou de formatacao`
-- `test: testes`
-- `docs: documentacao`
-- `chore: configuracao ou manutencao`
-
-Diretrizes:
-
-- manter commits pequenos e focados em uma unica alteracao;
-- evitar commits genéricos;
-- testar a funcionalidade antes de considera-la concluida;
-- commitar apenas quando a funcionalidade estiver funcionando.
-
-## Regras de desenvolvimento
-
-- Implementar uma funcionalidade por vez.
-- Nao avancar para sprints futuras sem necessidade.
-- Priorizar solucoes multiplataforma.
-- Nao depender de tecnologias especificas do computador do usuario para capturar audio.
-- O backend deve ser o responsavel pelo processamento e pela transcricao.
-- Nao adicionar dependencias desnecessarias.
-- Manter a arquitetura documentada quando houver mudancas relevantes.
-
-## Estrutura esperada
-
-A estrutura pode evoluir conforme a tecnologia escolhida, mas a separacao entre frontend e backend deve permanecer clara.
+A árvore abaixo mostra os arquivos versionados atualmente. O diretório `backend/temp/` é criado em runtime e está ignorado pelo Git.
 
 ```text
 audio-transcriber/
-├── frontend/
 ├── backend/
+│   ├── __init__.py
+│   ├── app/
+│   │   ├── __init__.py
+│   │   ├── __main__.py
+│   │   ├── audio_processing.py
+│   │   ├── main.py
+│   │   └── transcriber.py
+│   └── tests/
+│       ├── __init__.py
+│       ├── test_audio_processing.py
+│       └── test_transcriber.py
+├── frontend/
+│   ├── css/
+│   │   └── style.css
+│   ├── js/
+│   │   └── main.js
+│   └── index.html
+├── .gitignore
 ├── README.md
-└── .gitignore
+└── requirements.txt
 ```
 
-## Como este README deve ser usado
+## Como executar localmente
 
-Antes de implementar qualquer nova funcionalidade:
+### 1. Clonar o repositório
 
-1. Verifique em qual sprint ela pertence.
-2. Verifique se ela ja foi implementada.
-3. Leia o estado atual do projeto.
-4. Nao refaca funcionalidades existentes sem necessidade.
-5. Nao avance varias sprints de uma vez.
-6. Atualize este README quando uma sprint ou funcionalidade for realmente concluida.
+```bash
+git clone <URL_DO_REPOSITORIO>
+cd audio-transcriber
+```
 
+### 2. Criar e ativar o ambiente virtual
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
+### 3. Instalar as dependências Python
+
+```bash
+pip install -r requirements.txt
+```
+
+### 4. Verificar o FFmpeg
+
+```bash
+ffmpeg -version
+```
+
+No Ubuntu/Debian, se necessário:
+
+```bash
+sudo apt update
+sudo apt install ffmpeg
+```
+
+### 5. Iniciar o backend
+
+Execute a partir da raiz do projeto:
+
+```bash
+python3 -m backend.app
+```
+
+O backend sobe em:
+
+- `http://127.0.0.1:8000`
+- health check: `http://127.0.0.1:8000/api/health`
+
+### 6. Iniciar o frontend
+
+Execute a partir da pasta `frontend/`:
+
+```bash
+cd frontend
+python3 -m http.server 8001
+```
+
+A aplicação fica disponível em:
+
+- `http://127.0.0.1:8001/`
+
+## API
+
+### `GET /api/health`
+
+Retorna o estado básico do backend.
+
+Exemplo de resposta:
+
+```json
+{
+  "status": "ok"
+}
+```
+
+### `POST /api/audio`
+
+Recebe áudio em `multipart/form-data`, processa o arquivo com FFmpeg e transcreve com `faster-whisper`.
+
+#### Cabeçalhos
+
+- `Content-Type: multipart/form-data`
+- `Origin: http://127.0.0.1:8001` ou `http://localhost:8001` no desenvolvimento local
+
+#### Campos aceitos
+
+- `source_mode`:
+  - `OUTPUT`
+  - `INPUT`
+  - `BOTH`
+- `file`:
+  - compatibilidade com o fluxo legado de saída única
+- `output_file`:
+  - arquivo da saída
+- `input_file`:
+  - arquivo da entrada
+
+#### Regras por modo
+
+- **OUTPUT**: aceita `file` ou `output_file`
+- **INPUT**: exige `input_file`
+- **BOTH**: exige `input_file` e `output_file`
+
+#### MIME types aceitos
+
+O backend normaliza parâmetros do `Content-Type` antes de validar. Os tipos base aceitos são:
+
+- `audio/webm`
+- `audio/mp4`
+- `audio/ogg`
+
+#### Resposta de sucesso
+
+- **OUTPUT** e **INPUT**: retornam um objeto com metadados do upload, do processamento e da transcrição.
+- **BOTH**: retornam um objeto com duas chaves, `input` e `output`, cada uma com sua própria transcrição e metadados.
+
+Exemplo resumido para uma fonte única:
+
+```json
+{
+  "id": "uuid",
+  "status": "transcribed",
+  "source_mode": "OUTPUT",
+  "source": "output",
+  "source_label": "Saída",
+  "original_file": "uuid-output.webm",
+  "processed_file": "uuid-output.wav",
+  "contentType": "audio/webm",
+  "original_size": 123456,
+  "processed_size": 654321,
+  "format": "wav",
+  "sample_rate": 16000,
+  "channels": 1,
+  "processed_content_type": "audio/wav",
+  "text": "Texto transcrito aqui.",
+  "segments": []
+}
+```
+
+Exemplo resumido para `BOTH`:
+
+```json
+{
+  "id": "uuid",
+  "status": "transcribed",
+  "source_mode": "BOTH",
+  "input": {
+    "text": "Texto da entrada."
+  },
+  "output": {
+    "text": "Texto da saída."
+  }
+}
+```
+
+#### Códigos de erro
+
+- `400` — requisição inválida ou campos ausentes
+- `413` — arquivo maior que 50 MB
+- `415` — MIME type não suportado
+- `500` — erro interno de processamento ou transcrição
+- `503` — FFmpeg ou `faster-whisper` indisponíveis no backend
+
+## Como validar e testar
+
+### Verificações de sintaxe
+
+```bash
+python3 -m py_compile backend/app/*.py backend/tests/*.py
+node --check frontend/js/main.js
+```
+
+### Testes automatizados
+
+```bash
+python3 -m unittest discover -s backend/tests -p 'test*.py'
+```
+
+A suíte atual cobre validações de upload, processamento com FFmpeg, contrato da API e abstração de transcrição com mocks. Na validação local deste repositório, a suíte executou **21 testes** com sucesso. A validação real do navegador deve ser feita manualmente.
+
+### Fluxo manual recomendado
+
+1. Abrir o frontend em `http://127.0.0.1:8001/`.
+2. Escolher o modo de captura.
+3. Clicar em **Iniciar captura**.
+4. Conceder as permissões do navegador.
+5. Gravar áudio.
+6. Clicar em **Parar captura**.
+7. Reproduzir o áudio capturado.
+8. Baixar o áudio, se necessário.
+9. Clicar em **Enviar para transcrição**.
+10. Aguardar o processamento e conferir a transcrição exibida na interface.
+
+## Limitações atuais
+
+- A captura depende das APIs e permissões do navegador.
+- A captura de áudio de saída depende do que o navegador e o sistema operacional permitem compartilhar.
+- O modo `BOTH` usa duas capturas independentes e preserva a origem, mas ainda não faz diarização de falantes.
+- Não há histórico persistente de gravações ou transcrições.
+- Não há autenticação nem sistema de usuários.
+- Não há exportação TXT ou SRT.
+- Não há banco de dados nem deploy de produção.
+- O backend depende de FFmpeg e `faster-whisper` disponíveis no ambiente.
+
+## Roadmap futuro
+
+### MVP atual
+
+- captura de entrada, saída e entrada + saída no navegador;
+- reprodução e download do áudio;
+- upload para o backend;
+- normalização com FFmpeg;
+- transcrição com `faster-whisper`;
+- retorno JSON com transcrição e metadados;
+- testes automatizados.
+
+### Próximas versões
+
+- seleção e refinamento de idiomas;
+- exportação TXT;
+- exportação SRT;
+- timestamps mais ricos na interface;
+- interface mais polida;
+- histórico persistente;
+- autenticação;
+- limites e segurança para produção;
+- Docker;
+- deploy;
+- melhorias de performance;
+- identificação e diarização de falantes.
+
+## Decisões arquiteturais
+
+### Por que capturar no navegador?
+
+Porque a aplicação é web-first e precisa reduzir dependências do sistema operacional do usuário. A captura via APIs web mantém o fluxo multiplataforma e evita acoplamento com ferramentas locais de áudio.
+
+### Por que processar no backend?
+
+Porque o backend concentra a validação, a normalização do áudio e a transcrição, deixando o frontend mais simples e sem dependência direta do pipeline de IA.
+
+### Por que manter INPUT e OUTPUT separados?
+
+Para preservar a origem do áudio. Isso prepara o projeto para representar melhor o contexto da conversa nas próximas versões, sem misturar fontes diferentes antes da transcrição.
+
+### Por que usar FFmpeg?
+
+Porque ele normaliza formatos variados de áudio para um WAV consistente, compatível com o pipeline usado pelo `faster-whisper`.
+
+## Demo
+
+Screenshots e demonstrações serão adicionados em uma próxima atualização.
+
+## Licença
+
+Este repositório não inclui arquivo `LICENSE` no momento.
