@@ -41,11 +41,17 @@ def ensure_ffmpeg_available() -> None:
         )
 
 
-def process_audio_file(input_path: Path) -> Path:
+def process_audio_file(input_path: Path, source_label: str | None = None) -> Path:
     ensure_ffmpeg_available()
 
     PROCESSED_DIRECTORY.mkdir(parents=True, exist_ok=True)
-    output_path = PROCESSED_DIRECTORY / f"{uuid4().hex}.wav"
+    output_name = uuid4().hex
+    if source_label:
+        safe_label = "".join(
+            character for character in source_label.lower() if character.isalnum()
+        ) or "source"
+        output_name = f"{output_name}-{safe_label}"
+    output_path = PROCESSED_DIRECTORY / f"{output_name}.wav"
 
     command = [
         FFMPEG_COMMAND,

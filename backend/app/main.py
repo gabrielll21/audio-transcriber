@@ -1,8 +1,10 @@
+
 from __future__ import annotations
 
-from cgi import FieldStorage
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import logging
+from cgi import FieldStorage
+from dataclasses import dataclass
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from json import dumps
 from pathlib import Path
 from typing import ClassVar
@@ -15,6 +17,7 @@ from .audio_processing import (
 )
 from .transcriber import (
     TranscriptionError,
+    TranscriptionResult,
     TranscriptionUnavailableError,
     transcribe_processed_audio,
 )
@@ -38,9 +41,44 @@ ALLOWED_AUDIO_MIME_TYPES = {"audio/webm", "audio/mp4", "audio/ogg"}
 MAX_UPLOAD_SIZE_BYTES = 50 * 1024 * 1024
 UPLOAD_DIRECTORY = Path(__file__).resolve().parents[1] / "temp" / "uploads"
 
+SOURCE_MODE_INPUT = "INPUT"
+SOURCE_MODE_OUTPUT = "OUTPUT"
+SOURCE_MODE_BOTH = "BOTH"
+ALLOWED_SOURCE_MODES = {
+    SOURCE_MODE_INPUT,
+    SOURCE_MODE_OUTPUT,
+    SOURCE_MODE_BOTH,
+}
+LEGACY_FILE_FIELD = "file"
+INPUT_FILE_FIELD = "input_file"
+OUTPUT_FILE_FIELD = "output_file"
+SOURCE_LABELS = {
+    "input": "Entrada",
+    "output": "Saída",
+}
+
 
 class UploadTooLargeError(Exception):
     pass
+
+
+class UnsupportedMediaTypeError(Exception):
+    pass
+
+
+class AudioSaveError(Exception):
+    pass
+
+
+@dataclass(frozen=True)
+class SavedSourceAudio:
+    source: str
+    original_path: Path
+    original_content_type: str
+    original_size: int
+    processed_path: Path
+    processed_size: int
+    transcription: TranscriptionResult
 
 
 class AudioTranscriberHandler(BaseHTTPRequestHandler):
@@ -74,6 +112,9 @@ class AudioTranscriberHandler(BaseHTTPRequestHandler):
     def _handle_audio_upload(self) -> None:
         try:
             form = self._parse_multipart_form()
+            source_mode = self._resolve_source_mode(form)
+            source_items = self._resolve_source_items(form, source_mode)
+            results = self._process_sources(form, source_mode, source_items)
         except ValueError as error:
             self._send_json(
                 400,
@@ -83,43 +124,16 @@ class AudioTranscriberHandler(BaseHTTPRequestHandler):
                 },
             )
             return
-
-        file_item = form["file"] if "file" in form else None
-        if isinstance(file_item, list):
-            file_item = file_item[0]
-
-        if file_item is None or getattr(file_item, "filename", None) is None:
-            self._send_json(
-                400,
-                {
-                    "status": "error",
-                    "message": "Nenhum arquivo foi enviado.",
-                },
-            )
-            return
-
-        normalized_content_type = self._normalize_content_type(
-            getattr(file_item, "type", "") or file_item.headers.get("Content-Type", "")
-        )
-        if normalized_content_type not in ALLOWED_AUDIO_MIME_TYPES:
+        except UnsupportedMediaTypeError as error:
             self._send_json(
                 415,
                 {
                     "status": "error",
-                    "message": "Formato de áudio não suportado. Envie um arquivo audio/webm.",
+                    "message": str(error) or "Formato de áudio não suportado.",
                 },
             )
             return
-
-        upload_id = uuid4().hex
-        extension = self._extension_for_content_type(normalized_content_type)
-        UPLOAD_DIRECTORY.mkdir(parents=True, exist_ok=True)
-        destination = UPLOAD_DIRECTORY / f"{upload_id}.{extension}"
-
-        try:
-            size = self._store_upload(file_item.file, destination)
         except UploadTooLargeError:
-            destination.unlink(missing_ok=True)
             self._send_json(
                 413,
                 {
@@ -128,27 +142,21 @@ class AudioTranscriberHandler(BaseHTTPRequestHandler):
                 },
             )
             return
-        except OSError:
-            destination.unlink(missing_ok=True)
+        except AudioSaveError as error:
             self._send_json(
                 500,
                 {
                     "status": "error",
-                    "message": "Falha ao salvar o arquivo enviado.",
+                    "message": str(error) or "Falha ao salvar o arquivo enviado.",
                 },
             )
             return
-
-        try:
-            processed_path = process_audio_file(destination)
         except FfmpegUnavailableError:
             self._send_json(
                 503,
                 {
                     "status": "error",
-                    "message": (
-                        "O processamento depende do FFmpeg instalado no backend."
-                    ),
+                    "message": "O processamento depende do FFmpeg instalado no backend.",
                 },
             )
             return
@@ -161,9 +169,6 @@ class AudioTranscriberHandler(BaseHTTPRequestHandler):
                 },
             )
             return
-
-        try:
-            transcription = transcribe_processed_audio(processed_path)
         except TranscriptionUnavailableError:
             self._send_json(
                 503,
@@ -185,25 +190,187 @@ class AudioTranscriberHandler(BaseHTTPRequestHandler):
             )
             return
 
-        logger.info("Transcrição finalizada com sucesso para upload %s.", upload_id)
+        response_payload = self._build_success_payload(source_mode, results)
+        logger.info(
+            "Transcrição finalizada com sucesso para %s (%s).",
+            response_payload["id"],
+            source_mode,
+        )
+        self._send_json(201, response_payload)
 
-        self._send_json(
-            201,
-            {
+    def _process_sources(
+        self,
+        form: FieldStorage,
+        source_mode: str,
+        source_items: dict[str, FieldStorage],
+    ) -> dict[str, SavedSourceAudio]:
+        upload_id = uuid4().hex
+        uploaded_paths: list[Path] = []
+        results: dict[str, SavedSourceAudio] = {}
+
+        try:
+            ordered_sources = (
+                ["input", "output"] if source_mode == SOURCE_MODE_BOTH else list(source_items.keys())
+            )
+            for source in ordered_sources:
+                file_item = source_items[source]
+                result = self._process_single_source(upload_id, source, file_item)
+                results[source] = result
+                uploaded_paths.extend([result.original_path, result.processed_path])
+        except Exception:
+            for path in uploaded_paths:
+                path.unlink(missing_ok=True)
+            raise
+
+        return results
+
+    def _process_single_source(
+        self,
+        upload_id: str,
+        source: str,
+        file_item: FieldStorage,
+    ) -> SavedSourceAudio:
+        normalized_content_type = self._normalize_content_type(
+            getattr(file_item, "type", "") or file_item.headers.get("Content-Type", "")
+        )
+        if normalized_content_type not in ALLOWED_AUDIO_MIME_TYPES:
+            raise UnsupportedMediaTypeError(
+                "Formato de áudio não suportado. Envie um arquivo audio/webm."
+            )
+
+        extension = self._extension_for_content_type(normalized_content_type)
+        UPLOAD_DIRECTORY.mkdir(parents=True, exist_ok=True)
+        original_path = UPLOAD_DIRECTORY / f"{upload_id}-{source}.{extension}"
+
+        try:
+            original_size = self._store_upload(file_item.file, original_path)
+        except UploadTooLargeError:
+            original_path.unlink(missing_ok=True)
+            raise
+        except OSError as error:
+            original_path.unlink(missing_ok=True)
+            raise AudioSaveError("Falha ao salvar o arquivo enviado.") from error
+
+        processed_path = process_audio_file(original_path, source)
+        transcription = transcribe_processed_audio(processed_path)
+
+        return SavedSourceAudio(
+            source=source,
+            original_path=original_path,
+            original_content_type=normalized_content_type,
+            original_size=original_size,
+            processed_path=processed_path,
+            processed_size=processed_path.stat().st_size,
+            transcription=transcription,
+        )
+
+    def _resolve_source_mode(self, form: FieldStorage) -> str:
+        raw_value = self._get_text_field(form, "source_mode")
+        if raw_value:
+            source_mode = raw_value.strip().upper()
+            if source_mode not in ALLOWED_SOURCE_MODES:
+                raise ValueError("source_mode inválido. Use INPUT, OUTPUT ou BOTH.")
+            return source_mode
+
+        has_input = self._has_file_field(form, INPUT_FILE_FIELD)
+        has_output = self._has_file_field(form, OUTPUT_FILE_FIELD)
+        has_legacy = self._has_file_field(form, LEGACY_FILE_FIELD)
+
+        if has_input and has_output:
+            return SOURCE_MODE_BOTH
+
+        if has_input:
+            return SOURCE_MODE_INPUT
+
+        if has_output or has_legacy:
+            return SOURCE_MODE_OUTPUT
+
+        return SOURCE_MODE_OUTPUT
+
+    def _resolve_source_items(
+        self,
+        form: FieldStorage,
+        source_mode: str,
+    ) -> dict[str, FieldStorage]:
+        if source_mode == SOURCE_MODE_BOTH:
+            input_item = self._get_file_field(form, INPUT_FILE_FIELD)
+            output_item = self._get_file_field(form, OUTPUT_FILE_FIELD)
+            if input_item is None:
+                raise ValueError("No modo BOTH, o arquivo de entrada é obrigatório.")
+            if output_item is None:
+                raise ValueError("No modo BOTH, o arquivo de saída é obrigatório.")
+            return {"input": input_item, "output": output_item}
+
+        if source_mode == SOURCE_MODE_INPUT:
+            input_item = self._get_file_field(form, INPUT_FILE_FIELD)
+            if input_item is None:
+                input_item = self._get_file_field(form, LEGACY_FILE_FIELD)
+            if input_item is None:
+                raise ValueError("Nenhum arquivo de entrada foi enviado.")
+            return {"input": input_item}
+
+        output_item = self._get_file_field(form, OUTPUT_FILE_FIELD)
+        if output_item is None:
+            output_item = self._get_file_field(form, LEGACY_FILE_FIELD)
+        if output_item is None:
+            raise ValueError("Nenhum arquivo de saída foi enviado.")
+        return {"output": output_item}
+
+    def _build_success_payload(
+        self,
+        source_mode: str,
+        results: dict[str, SavedSourceAudio],
+    ) -> dict[str, object]:
+        upload_id = next(iter(results.values())).original_path.stem.split("-")[0]
+
+        if source_mode == SOURCE_MODE_BOTH:
+            return {
                 "id": upload_id,
                 "status": "transcribed",
-                "original_file": destination.name,
-                "processed_file": processed_path.name,
-                "contentType": normalized_content_type,
-                "original_size": size,
-                "processed_size": processed_path.stat().st_size,
-                "format": "wav",
-                "sample_rate": 16000,
-                "channels": 1,
-                "processed_content_type": "audio/wav",
-                "text": transcription.text,
-            },
-        )
+                "source_mode": SOURCE_MODE_BOTH,
+                "input": self._build_source_payload(results["input"]),
+                "output": self._build_source_payload(results["output"]),
+            }
+
+        source_key = "input" if source_mode == SOURCE_MODE_INPUT else "output"
+        source_payload = self._build_source_payload(results[source_key])
+        return {
+            "id": upload_id,
+            "status": "transcribed",
+            "source_mode": source_mode,
+            **source_payload,
+        }
+
+    def _build_source_payload(self, saved_source: SavedSourceAudio) -> dict[str, object]:
+        transcription = saved_source.transcription
+        upload_id = saved_source.original_path.stem.split("-", 1)[0]
+        segments = getattr(transcription, "segments", []) or []
+        return {
+            "id": upload_id,
+            "status": "transcribed",
+            "source": saved_source.source,
+            "source_label": SOURCE_LABELS[saved_source.source],
+            "original_file": saved_source.original_path.name,
+            "processed_file": saved_source.processed_path.name,
+            "contentType": saved_source.original_content_type,
+            "original_size": saved_source.original_size,
+            "processed_size": saved_source.processed_size,
+            "format": "wav",
+            "sample_rate": 16000,
+            "channels": 1,
+            "processed_content_type": "audio/wav",
+            "text": getattr(transcription, "text", ""),
+            "segments": [
+                {
+                    "start": segment.start,
+                    "end": segment.end,
+                    "text": segment.text,
+                }
+                for segment in segments
+            ],
+            "language": getattr(transcription, "language", None),
+            "language_probability": getattr(transcription, "language_probability", None),
+        }
 
     def _parse_multipart_form(self) -> FieldStorage:
         content_type = self.headers.get("Content-Type", "")
@@ -244,9 +411,39 @@ class AudioTranscriberHandler(BaseHTTPRequestHandler):
 
         return size
 
+    def _get_file_field(self, form: FieldStorage, field_name: str) -> FieldStorage | None:
+        field = form[field_name] if field_name in form else None
+        if isinstance(field, list):
+            return field[0]
+        if field is None:
+            return None
+        if getattr(field, "filename", None) is None:
+            return None
+        return field
+
+    def _has_file_field(self, form: FieldStorage, field_name: str) -> bool:
+        return self._get_file_field(form, field_name) is not None
+
+    def _get_text_field(self, form: FieldStorage, field_name: str) -> str:
+        field = form[field_name] if field_name in form else None
+        if isinstance(field, list):
+            field = field[0]
+        if field is None:
+            return ""
+        if getattr(field, "filename", None) is not None:
+            return ""
+        value = getattr(field, "value", "")
+        return value if isinstance(value, str) else str(value)
+
     def _extension_for_content_type(self, content_type: str) -> str:
         if content_type == "audio/webm":
             return "webm"
+
+        if content_type == "audio/mp4":
+            return "mp4"
+
+        if content_type == "audio/ogg":
+            return "ogg"
 
         return "bin"
 
