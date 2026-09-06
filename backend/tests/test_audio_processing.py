@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 import http.client
@@ -65,9 +66,7 @@ class AudioProcessingTestCase(unittest.TestCase):
         self,
         *,
         fields: dict[str, str] | None = None,
-        file_bytes: bytes | None = None,
-        filename: str = "sample.webm",
-        content_type: str = "audio/webm",
+        files: dict[str, tuple[str, str, bytes]] | None = None,
     ) -> tuple[bytes, str]:
         boundary = "----AudioTranscriberBoundary"
         body_parts: list[bytes] = []
@@ -81,11 +80,11 @@ class AudioProcessingTestCase(unittest.TestCase):
                 ).encode("utf-8")
             )
 
-        if file_bytes is not None:
+        for field_name, (filename, content_type, file_bytes) in (files or {}).items():
             body_parts.append(
                 (
                     f"--{boundary}\r\n"
-                    f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
+                    f'Content-Disposition: form-data; name="{field_name}"; filename="{filename}"\r\n'
                     f"Content-Type: {content_type}\r\n\r\n"
                 ).encode("utf-8")
             )
@@ -149,7 +148,7 @@ class AudioProcessingTestCase(unittest.TestCase):
     def test_process_audio_file_produces_standardized_wav(self) -> None:
         input_file = self._generate_sample_webm(Path(self.temp_root.name) / "source.webm")
 
-        output_file = audio_processing.process_audio_file(input_file)
+        output_file = audio_processing.process_audio_file(input_file, "output")
 
         self.assertTrue(input_file.exists())
         self.assertTrue(output_file.exists())
@@ -166,22 +165,29 @@ class AudioProcessingTestCase(unittest.TestCase):
         invalid_input.write_bytes(b"not a real audio file")
 
         with self.assertRaises(AudioProcessingError):
-            audio_processing.process_audio_file(invalid_input)
+            audio_processing.process_audio_file(invalid_input, "output")
 
     def test_ffmpeg_unavailable_is_reported_cleanly(self) -> None:
         with patch.object(audio_processing.subprocess, "run", side_effect=FileNotFoundError):
             with self.assertRaises(FfmpegUnavailableError):
                 audio_processing.ensure_ffmpeg_available()
 
-    def test_upload_returns_transcribed_audio_metadata(self) -> None:
-        input_file = self._generate_sample_webm(Path(self.temp_root.name) / "upload.webm")
-        file_bytes = input_file.read_bytes()
-        body, content_type = self._build_multipart(file_bytes=file_bytes)
+    def test_upload_output_returns_transcribed_audio_metadata(self) -> None:
+        output_file = self._generate_sample_webm(Path(self.temp_root.name) / "upload.webm")
+        file_bytes = output_file.read_bytes()
+        body, content_type = self._build_multipart(
+            files={
+                "file": ("upload.webm", "audio/webm", file_bytes),
+            },
+        )
 
         with patch.object(
             main,
             "transcribe_processed_audio",
-            return_value=SimpleNamespace(text="Texto transcrito de teste."),
+            return_value=SimpleNamespace(
+                text="Texto transcrito de teste.",
+                segments=[],
+            ),
         ):
             status, _, response_body = self._request(
                 "POST",
@@ -197,6 +203,9 @@ class AudioProcessingTestCase(unittest.TestCase):
         payload = json.loads(response_body)
         self.assertEqual(status, 201)
         self.assertEqual(payload["status"], "transcribed")
+        self.assertEqual(payload["source_mode"], "OUTPUT")
+        self.assertEqual(payload["source"], "output")
+        self.assertEqual(payload["text"], "Texto transcrito de teste.")
         self.assertEqual(payload["format"], "wav")
         self.assertEqual(payload["sample_rate"], 16000)
         self.assertEqual(payload["channels"], 1)
@@ -204,7 +213,6 @@ class AudioProcessingTestCase(unittest.TestCase):
         self.assertTrue(payload["processed_file"].endswith(".wav"))
         self.assertGreater(payload["original_size"], 0)
         self.assertGreater(payload["processed_size"], 0)
-        self.assertEqual(payload["text"], "Texto transcrito de teste.")
 
         original_path = self.upload_dir / payload["original_file"]
         processed_path = self.processed_dir / payload["processed_file"]
@@ -216,6 +224,154 @@ class AudioProcessingTestCase(unittest.TestCase):
         self.assertEqual(stream_info["codec_name"], "pcm_s16le")
         self.assertEqual(int(stream_info["sample_rate"]), 16000)
         self.assertEqual(int(stream_info["channels"]), 1)
+
+    def test_upload_input_returns_transcribed_audio_metadata(self) -> None:
+        input_file = self._generate_sample_webm(Path(self.temp_root.name) / "input.webm")
+        file_bytes = input_file.read_bytes()
+        body, content_type = self._build_multipart(
+            fields={"source_mode": "INPUT"},
+            files={
+                "input_file": ("input.webm", "audio/webm", file_bytes),
+            },
+        )
+
+        with patch.object(
+            main,
+            "transcribe_processed_audio",
+            return_value=SimpleNamespace(text="Texto da entrada.", segments=[]),
+        ):
+            status, _, response_body = self._request(
+                "POST",
+                "/api/audio",
+                body=body,
+                headers={
+                    "Content-Type": content_type,
+                    "Content-Length": str(len(body)),
+                    "Origin": "http://127.0.0.1:8001",
+                },
+            )
+
+        payload = json.loads(response_body)
+        self.assertEqual(status, 201)
+        self.assertEqual(payload["status"], "transcribed")
+        self.assertEqual(payload["source_mode"], "INPUT")
+        self.assertEqual(payload["source"], "input")
+        self.assertEqual(payload["text"], "Texto da entrada.")
+
+    def test_upload_both_returns_separated_transcriptions(self) -> None:
+        input_file = self._generate_sample_webm(Path(self.temp_root.name) / "input.webm")
+        output_file = self._generate_sample_webm(Path(self.temp_root.name) / "output.webm")
+
+        def fake_transcribe(path: Path | str):
+            file_name = Path(path).stem
+            if file_name.endswith("-input"):
+                return SimpleNamespace(
+                    text="Texto da entrada.",
+                    segments=[SimpleNamespace(start=0.0, end=1.0, text="Texto da entrada.")],
+                )
+            return SimpleNamespace(
+                text="Texto da saída.",
+                segments=[SimpleNamespace(start=1.5, end=2.0, text="Texto da saída.")],
+            )
+
+        body, content_type = self._build_multipart(
+            fields={"source_mode": "BOTH"},
+            files={
+                "input_file": ("input.webm", "audio/webm", input_file.read_bytes()),
+                "output_file": ("output.webm", "audio/webm", output_file.read_bytes()),
+            },
+        )
+
+        with patch.object(main, "transcribe_processed_audio", side_effect=fake_transcribe):
+            status, _, response_body = self._request(
+                "POST",
+                "/api/audio",
+                body=body,
+                headers={
+                    "Content-Type": content_type,
+                    "Content-Length": str(len(body)),
+                    "Origin": "http://127.0.0.1:8001",
+                },
+            )
+
+        payload = json.loads(response_body)
+        self.assertEqual(status, 201)
+        self.assertEqual(payload["source_mode"], "BOTH")
+        self.assertEqual(payload["input"]["source"], "input")
+        self.assertEqual(payload["output"]["source"], "output")
+        self.assertEqual(payload["input"]["text"], "Texto da entrada.")
+        self.assertEqual(payload["output"]["text"], "Texto da saída.")
+        self.assertGreaterEqual(len(payload["input"]["segments"]), 1)
+        self.assertGreaterEqual(len(payload["output"]["segments"]), 1)
+
+    def test_upload_rejects_invalid_source_mode(self) -> None:
+        body, content_type = self._build_multipart(
+            fields={"source_mode": "INVALID"},
+            files={"file": ("sample.webm", "audio/webm", b"fake")},
+        )
+
+        status, _, response_body = self._request(
+            "POST",
+            "/api/audio",
+            body=body,
+            headers={
+                "Content-Type": content_type,
+                "Content-Length": str(len(body)),
+                "Origin": "http://127.0.0.1:8001",
+            },
+        )
+
+        payload = json.loads(response_body)
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["status"], "error")
+
+    def test_upload_both_rejects_missing_input(self) -> None:
+        output_file = self._generate_sample_webm(Path(self.temp_root.name) / "output.webm")
+        body, content_type = self._build_multipart(
+            fields={"source_mode": "BOTH"},
+            files={
+                "output_file": ("output.webm", "audio/webm", output_file.read_bytes()),
+            },
+        )
+
+        status, _, response_body = self._request(
+            "POST",
+            "/api/audio",
+            body=body,
+            headers={
+                "Content-Type": content_type,
+                "Content-Length": str(len(body)),
+                "Origin": "http://127.0.0.1:8001",
+            },
+        )
+
+        payload = json.loads(response_body)
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["status"], "error")
+
+    def test_upload_both_rejects_missing_output(self) -> None:
+        input_file = self._generate_sample_webm(Path(self.temp_root.name) / "input.webm")
+        body, content_type = self._build_multipart(
+            fields={"source_mode": "BOTH"},
+            files={
+                "input_file": ("input.webm", "audio/webm", input_file.read_bytes()),
+            },
+        )
+
+        status, _, response_body = self._request(
+            "POST",
+            "/api/audio",
+            body=body,
+            headers={
+                "Content-Type": content_type,
+                "Content-Length": str(len(body)),
+                "Origin": "http://127.0.0.1:8001",
+            },
+        )
+
+        payload = json.loads(response_body)
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["status"], "error")
 
     def test_upload_rejects_missing_file(self) -> None:
         body, content_type = self._build_multipart(fields={"note": "sem arquivo"})
@@ -237,9 +393,7 @@ class AudioProcessingTestCase(unittest.TestCase):
 
     def test_upload_rejects_invalid_mime(self) -> None:
         body, content_type = self._build_multipart(
-            file_bytes=b"plain text",
-            filename="sample.txt",
-            content_type="text/plain",
+            files={"file": ("sample.txt", "text/plain", b"plain text")},
         )
 
         status, _, response_body = self._request(
@@ -258,7 +412,10 @@ class AudioProcessingTestCase(unittest.TestCase):
         self.assertEqual(payload["status"], "error")
 
     def test_upload_rejects_oversized_file(self) -> None:
-        body, content_type = self._build_multipart(file_bytes=b"0123456789abcdef")
+        body, content_type = self._build_multipart(
+            fields={"source_mode": "OUTPUT"},
+            files={"file": ("sample.webm", "audio/webm", b"0123456789abcdef")},
+        )
 
         with patch.object(main, "MAX_UPLOAD_SIZE_BYTES", 8):
             status, _, response_body = self._request(
