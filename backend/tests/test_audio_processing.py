@@ -8,6 +8,7 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from backend.app import audio_processing, main
@@ -172,25 +173,30 @@ class AudioProcessingTestCase(unittest.TestCase):
             with self.assertRaises(FfmpegUnavailableError):
                 audio_processing.ensure_ffmpeg_available()
 
-    def test_upload_returns_processed_audio_metadata(self) -> None:
+    def test_upload_returns_transcribed_audio_metadata(self) -> None:
         input_file = self._generate_sample_webm(Path(self.temp_root.name) / "upload.webm")
         file_bytes = input_file.read_bytes()
         body, content_type = self._build_multipart(file_bytes=file_bytes)
 
-        status, _, response_body = self._request(
-            "POST",
-            "/api/audio",
-            body=body,
-            headers={
-                "Content-Type": content_type,
-                "Content-Length": str(len(body)),
-                "Origin": "http://127.0.0.1:8001",
-            },
-        )
+        with patch.object(
+            main,
+            "transcribe_processed_audio",
+            return_value=SimpleNamespace(text="Texto transcrito de teste."),
+        ):
+            status, _, response_body = self._request(
+                "POST",
+                "/api/audio",
+                body=body,
+                headers={
+                    "Content-Type": content_type,
+                    "Content-Length": str(len(body)),
+                    "Origin": "http://127.0.0.1:8001",
+                },
+            )
 
         payload = json.loads(response_body)
         self.assertEqual(status, 201)
-        self.assertEqual(payload["status"], "processed")
+        self.assertEqual(payload["status"], "transcribed")
         self.assertEqual(payload["format"], "wav")
         self.assertEqual(payload["sample_rate"], 16000)
         self.assertEqual(payload["channels"], 1)
@@ -198,6 +204,7 @@ class AudioProcessingTestCase(unittest.TestCase):
         self.assertTrue(payload["processed_file"].endswith(".wav"))
         self.assertGreater(payload["original_size"], 0)
         self.assertGreater(payload["processed_size"], 0)
+        self.assertEqual(payload["text"], "Texto transcrito de teste.")
 
         original_path = self.upload_dir / payload["original_file"]
         processed_path = self.processed_dir / payload["processed_file"]
