@@ -28,8 +28,16 @@ class TranscriptionUnavailableError(TranscriptionError):
 
 
 @dataclass(frozen=True)
+class TranscriptionSegment:
+    start: float | None
+    end: float | None
+    text: str
+
+
+@dataclass(frozen=True)
 class TranscriptionResult:
     text: str
+    segments: list[TranscriptionSegment]
     language: str | None = None
     language_probability: float | None = None
 
@@ -95,13 +103,15 @@ class WhisperTranscriber:
             logger.exception("Erro durante a transcrição.")
             raise TranscriptionError("Não foi possível transcrever o áudio.") from error
 
-        text = self._combine_segments(segments)
+        normalized_segments = self._normalize_segments(segments)
+        text = self._combine_segments(normalized_segments)
         if not text:
             raise TranscriptionError("A transcrição retornou texto vazio.")
 
         logger.info("Transcrição concluída para %s.", path.name)
         return TranscriptionResult(
             text=text,
+            segments=normalized_segments,
             language=getattr(info, "language", None),
             language_probability=getattr(info, "language_probability", None),
         )
@@ -113,19 +123,45 @@ class WhisperTranscriber:
         if path.stat().st_size <= 0:
             raise TranscriptionError("O arquivo processado está vazio.")
 
-    def _combine_segments(self, segments: Iterable[object]) -> str:
-        parts: list[str] = []
+    def _normalize_segments(self, segments: Iterable[object]) -> list[TranscriptionSegment]:
+        normalized_segments: list[TranscriptionSegment] = []
 
         for segment in segments:
             text = getattr(segment, "text", "")
             if not isinstance(text, str):
                 continue
 
-            normalized = " ".join(text.split())
-            if normalized:
-                parts.append(normalized)
+            normalized_text = " ".join(text.split())
+            if not normalized_text:
+                continue
+
+            normalized_segments.append(
+                TranscriptionSegment(
+                    start=self._coerce_float(getattr(segment, "start", None)),
+                    end=self._coerce_float(getattr(segment, "end", None)),
+                    text=normalized_text,
+                )
+            )
+
+        return normalized_segments
+
+    def _combine_segments(self, segments: Iterable[TranscriptionSegment]) -> str:
+        parts: list[str] = []
+
+        for segment in segments:
+            if segment.text:
+                parts.append(segment.text)
 
         return " ".join(parts).strip()
+
+    def _coerce_float(self, value: object) -> float | None:
+        if value is None:
+            return None
+
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
 
 
 _TRANSCRIBER: WhisperTranscriber | None = None
