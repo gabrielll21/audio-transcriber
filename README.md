@@ -246,6 +246,48 @@ A aplicação fica disponível em:
 
 - `http://127.0.0.1:8001/`
 
+## Como executar com Docker
+
+### Pré-requisitos
+
+- Docker
+- Docker Compose
+
+### Iniciar os containers
+
+```bash
+docker compose up --build
+```
+
+Para iniciar em background:
+
+```bash
+docker compose up --build -d
+```
+
+### Acessar a aplicação
+
+- Frontend: `http://localhost:8001`
+- Backend: `http://localhost:8000`
+- Health check: `http://localhost:8000/api/health`
+
+### Verificar o ambiente
+
+```bash
+docker compose ps
+docker compose logs
+docker compose logs backend
+docker compose logs frontend
+```
+
+### Encerrar o ambiente
+
+```bash
+docker compose down
+```
+
+No ambiente Docker, o frontend é servido por `nginx` em um container separado. O navegador acessa o frontend em `localhost:8001`, e o frontend continua chamando o backend em `http://127.0.0.1:8000` durante o desenvolvimento local, preservando o comportamento atual do projeto.
+
 ## API
 
 ### `GET /api/health`
@@ -398,6 +440,7 @@ A suíte atual cobre validações de upload, processamento com FFmpeg, contrato 
 - upload para o backend;
 - normalização com FFmpeg;
 - transcrição com `faster-whisper`;
+- execução local com `python3 -m http.server` ou com Docker Compose;
 - retorno JSON com transcrição e metadados;
 - testes automatizados.
 
