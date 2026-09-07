@@ -1,0 +1,14 @@
+.git
+.idea
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+.mypy_cache
+.ruff_cache
+backend/temp/
+recordings/
+transcriptions/
+frontend/
