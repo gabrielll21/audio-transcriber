@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from cgi import FieldStorage
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -480,9 +481,11 @@ def create_server(host: str = "127.0.0.1", port: int = 8000) -> ThreadingHTTPSer
 
 
 def main() -> None:
-    server = create_server()
-    print("Audio Transcriber backend running at http://127.0.0.1:8000")
-    print("Health check available at http://127.0.0.1:8000/api/health")
+    host = os.environ.get("AUDIO_TRANSCRIBER_HOST", "127.0.0.1")
+    port = int(os.environ.get("AUDIO_TRANSCRIBER_PORT", "8000"))
+    server = create_server(host=host, port=port)
+    print(f"Audio Transcriber backend running at http://{host}:{port}")
+    print(f"Health check available at http://{host}:{port}/api/health")
     server.serve_forever()
 
 
