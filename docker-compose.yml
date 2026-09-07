@@ -1,0 +1,11 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: audio-transcriber-backend
+    ports:
+      - "8000:8000"
+    environment:
+      AUDIO_TRANSCRIBER_HOST: 0.0.0.0
+      AUDIO_TRANSCRIBER_PORT: 8000
