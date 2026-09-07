@@ -52,10 +52,12 @@ const UPLOAD_STATES = {
 };
 
 const elements = {
+  recordingPanel: document.querySelector(".recording-panel"),
   startButton: document.getElementById("start-button"),
   stopButton: document.getElementById("stop-button"),
   stateBadge: document.getElementById("capture-state"),
   statusMessage: document.getElementById("status-message"),
+  recordingDuration: document.getElementById("recording-duration"),
   modeRadios: Array.from(document.querySelectorAll('input[name="source-mode"]')),
   playbackPanel: document.getElementById("playback-panel"),
   playbackSources: document.getElementById("playback-sources"),
@@ -70,6 +72,7 @@ const elements = {
   transcriptionMessage: document.getElementById("transcription-message"),
   transcriptionState: document.getElementById("transcription-state"),
   transcriptionSources: document.getElementById("transcription-sources"),
+  diagnosticsPanel: document.querySelector(".diagnostics"),
   diagnosticsSources: document.getElementById("diagnostics-sources"),
 };
 
@@ -93,6 +96,7 @@ let uploadAbortController = null;
 let uploadTimeoutId = null;
 let uploadStageTimeoutIds = [];
 let uploadTimedOut = false;
+let recordingTimerIntervalId = null;
 
 function escapeHtml(value) {
   return String(value)
@@ -339,6 +343,9 @@ function setState(nextState, message, type = "info") {
   captureState = nextState;
   elements.stateBadge.textContent = nextState;
   elements.stateBadge.classList.remove("is-recording", "is-warning", "is-error", "is-playback");
+  if (elements.recordingPanel) {
+    elements.recordingPanel.dataset.captureState = nextState;
+  }
 
   if (type === "recording") {
     elements.stateBadge.classList.add("is-recording");
@@ -361,11 +368,20 @@ function setState(nextState, message, type = "info") {
 
   elements.startButton.disabled = isBusy;
   elements.stopButton.disabled = nextState !== STATES.RECORDING;
+
+  if (nextState === STATES.RECORDING) {
+    startRecordingTimer();
+  } else {
+    stopRecordingTimer();
+  }
 }
 
 function setUploadState(nextState, message, type = "info") {
   uploadState = nextState;
   elements.uploadState.textContent = nextState;
+  if (elements.uploadPanel) {
+    elements.uploadPanel.dataset.uploadState = nextState;
+  }
   elements.uploadState.classList.remove(
     "is-loading",
     "is-transcribing",
@@ -388,6 +404,39 @@ function setUploadState(nextState, message, type = "info") {
   }
 
   elements.uploadButton.disabled = isUploadBusyState(nextState) || !hasRecordedSources();
+}
+
+function updateRecordingTimerDisplay() {
+  if (!elements.recordingDuration) {
+    return;
+  }
+
+  if (!activeRecording) {
+    elements.recordingDuration.textContent = "00:00";
+    return;
+  }
+
+  const elapsed = performance.now() - (activeRecording.startedAt || performance.now());
+  elements.recordingDuration.textContent = formatClockDuration(elapsed / 1000);
+}
+
+function startRecordingTimer() {
+  updateRecordingTimerDisplay();
+
+  if (recordingTimerIntervalId) {
+    return;
+  }
+
+  recordingTimerIntervalId = window.setInterval(updateRecordingTimerDisplay, 250);
+}
+
+function stopRecordingTimer() {
+  if (recordingTimerIntervalId) {
+    clearInterval(recordingTimerIntervalId);
+    recordingTimerIntervalId = null;
+  }
+
+  updateRecordingTimerDisplay();
 }
 
 function isUploadBusyState(state) {
@@ -427,6 +476,9 @@ function clearPlaybackResult() {
 }
 
 function clearDiagnosticsResult() {
+  if (elements.diagnosticsPanel) {
+    elements.diagnosticsPanel.hidden = true;
+  }
   elements.diagnosticsSources.innerHTML = "";
 }
 
@@ -616,6 +668,9 @@ function renderDiagnosticsSources() {
     `);
   }
 
+  if (elements.diagnosticsPanel) {
+    elements.diagnosticsPanel.hidden = sources.length === 0;
+  }
   elements.diagnosticsSources.innerHTML = sources.join("");
 }
 
@@ -775,7 +830,7 @@ function renderUploadResult(payload) {
   elements.uploadResult.innerHTML = cards.join("");
 }
 
-function createSession(sourceKey, stream) {
+function createSession(sourceKey, stream, { autoStart = true } = {}) {
   const mimeType = selectSupportedMimeType();
   const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
   const session = {
@@ -810,7 +865,9 @@ function createSession(sourceKey, stream) {
     track.onended = () => handleTrackEnded(sourceKey);
   });
 
-  recorder.start();
+  if (autoStart) {
+    recorder.start();
+  }
   return session;
 }
 
@@ -1226,3 +1283,201 @@ async function uploadRecording() {
   }
 }
 
+async function acquireInputStream() {
+  if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== "function") {
+    throw new DOMException("getUserMedia indisponível", "NotSupportedError");
+  }
+
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  if (!stream.getAudioTracks().length) {
+    stopStream(stream);
+    throw new DOMException("Sem áudio na entrada", "NotReadableError");
+  }
+
+  return stream;
+}
+
+async function acquireOutputStream() {
+  if (!navigator.mediaDevices || typeof navigator.mediaDevices.getDisplayMedia !== "function") {
+    throw new DOMException("getDisplayMedia indisponível", "NotSupportedError");
+  }
+
+  const stream = await navigator.mediaDevices.getDisplayMedia({
+    video: true,
+    audio: true,
+    systemAudio: "include",
+  });
+
+  if (!stream.getAudioTracks().length) {
+    stopStream(stream);
+    throw new DOMException(
+      "A fonte selecionada não forneceu áudio.",
+      "NotReadableError",
+    );
+  }
+
+  return stream;
+}
+
+function stopRecording(reason = "user") {
+  if (!activeRecording || captureState !== STATES.RECORDING) {
+    return;
+  }
+
+  stopRequestedBy = reason;
+  setState(
+    STATES.STOPPING,
+    reason === "external"
+      ? "A interface do navegador encerrou a captura. Finalizando a gravação..."
+      : "Finalizando a gravação...",
+    "warning",
+  );
+
+  try {
+    for (const sourceKey of activeRecording.expectedSources) {
+      const session = activeRecording.sessions[sourceKey];
+      if (session?.recorder && session.recorder.state !== "inactive") {
+        session.recorder.stop();
+      }
+      stopStream(session?.stream);
+    }
+  } catch (error) {
+    abortRecording("Não foi possível finalizar a gravação corretamente.");
+    console.error("Falha ao parar a gravação.", error);
+  }
+}
+
+function handleModeChange(event) {
+  if (!event?.currentTarget?.value) {
+    return;
+  }
+
+  setSelectedSourceMode(event.currentTarget.value);
+}
+
+async function startCapture() {
+  if (captureState === STATES.REQUESTING_PERMISSION || captureState === STATES.RECORDING) {
+    return;
+  }
+
+  if (!navigator.mediaDevices) {
+    setState(STATES.ERROR, "Este navegador não oferece suporte para captura.", "error");
+    return;
+  }
+
+  if (typeof MediaRecorder === "undefined") {
+    setState(
+      STATES.ERROR,
+      "Este navegador não oferece suporte para gravação com MediaRecorder.",
+      "error",
+    );
+    return;
+  }
+
+  const sourceMode = getSelectedSourceMode();
+  setSelectedSourceMode(sourceMode);
+
+  setState(
+    STATES.REQUESTING_PERMISSION,
+    sourceMode === SOURCE_MODES.BOTH
+      ? "Solicitando permissão para microfone e compartilhamento de tela/aba..."
+      : sourceMode === SOURCE_MODES.INPUT
+        ? "Solicitando permissão para o microfone..."
+        : "Solicitando permissão para compartilhar uma aba, janela ou tela com áudio...",
+    "warning",
+  );
+
+  const acquiredStreams = {};
+
+  try {
+    if (sourceMode === SOURCE_MODES.INPUT) {
+      acquiredStreams.input = await acquireInputStream();
+    } else if (sourceMode === SOURCE_MODES.BOTH) {
+      acquiredStreams.input = await acquireInputStream();
+      acquiredStreams.output = await acquireOutputStream();
+    } else {
+      acquiredStreams.output = await acquireOutputStream();
+    }
+  } catch (error) {
+    for (const stream of Object.values(acquiredStreams)) {
+      stopStream(stream);
+    }
+    setState(STATES.ERROR, getCaptureErrorMessage(error, sourceMode), "error");
+    return;
+  }
+
+  const expectedSources =
+    sourceMode === SOURCE_MODES.BOTH
+      ? ["input", "output"]
+      : [sourceMode === SOURCE_MODES.INPUT ? "input" : "output"];
+
+  activeRecording = {
+    mode: sourceMode,
+    sessions: {},
+    expectedSources,
+    completedCount: 0,
+    aborted: false,
+    startedAt: performance.now(),
+  };
+
+  try {
+    for (const sourceKey of expectedSources) {
+      const stream = acquiredStreams[sourceKey];
+      activeRecording.sessions[sourceKey] = createSession(sourceKey, stream, {
+        autoStart: false,
+      });
+    }
+
+    for (const sourceKey of expectedSources) {
+      const session = activeRecording.sessions[sourceKey];
+      session.recorder.start();
+    }
+
+    startRecordingTimer();
+    setState(
+      STATES.RECORDING,
+      sourceMode === SOURCE_MODES.BOTH
+        ? "Capturando entrada e saída em paralelo."
+        : sourceMode === SOURCE_MODES.INPUT
+          ? "Capturando o áudio do microfone."
+          : "Capturando o áudio compartilhado pelo navegador.",
+      "recording",
+    );
+  } catch (error) {
+    for (const stream of Object.values(acquiredStreams)) {
+      stopStream(stream);
+    }
+    activeRecording = null;
+    setState(STATES.ERROR, getCaptureErrorMessage(error, sourceMode), "error");
+  }
+}
+
+function bindEvents() {
+  elements.startButton.addEventListener("click", startCapture);
+  elements.stopButton.addEventListener("click", () => stopRecording("user"));
+  elements.newRecordingButton.addEventListener("click", clearRecordedSession);
+  elements.uploadButton.addEventListener("click", uploadRecording);
+
+  for (const radio of elements.modeRadios) {
+    radio.addEventListener("change", handleModeChange);
+  }
+}
+
+function initialize() {
+  setSelectedSourceMode(getSelectedSourceMode());
+  clearRecordingTimer();
+  resetUiToIdle();
+  bindEvents();
+}
+
+function clearRecordingTimer() {
+  if (recordingTimerIntervalId) {
+    clearInterval(recordingTimerIntervalId);
+    recordingTimerIntervalId = null;
+  }
+  if (elements.recordingDuration) {
+    elements.recordingDuration.textContent = "00:00";
+  }
+}
+
+initialize();
