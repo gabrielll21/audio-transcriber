@@ -7,118 +7,205 @@
     <link rel="stylesheet" href="css/style.css" />
   </head>
   <body>
-    <main class="page">
-      <section class="card">
-        <p class="eyebrow">Audio Transcriber</p>
-        <h1>Captura de áudio no navegador</h1>
-        <p class="lead">
-          Teste a captura de áudio do navegador para validar permissões, a
-          fonte escolhida e a gravação local em memória.
-        </p>
+    <div class="app-backdrop" aria-hidden="true"></div>
 
-        <div class="status-panel" aria-live="polite">
-          <div class="status-line">
-            <span class="status-label">Estado</span>
-            <span class="status-badge" id="capture-state">IDLE</span>
+    <main class="app-shell">
+      <header class="site-header">
+        <div class="brand-lockup">
+          <span class="brand-mark" aria-hidden="true">AT</span>
+          <div>
+            <p class="brand-name">Audio Transcriber</p>
+            <p class="brand-subtitle">Captura, processamento e transcrição no navegador</p>
           </div>
-          <p class="message" id="status-message">
-            Nenhuma captura ativa. Clique em Iniciar captura para escolher uma
-            fonte com áudio.
+        </div>
+
+        <div class="header-meta" aria-label="Resumo do projeto">
+          <span class="header-chip">Web-first</span>
+          <span class="header-chip">FFmpeg</span>
+          <span class="header-chip">faster-whisper</span>
+        </div>
+      </header>
+
+      <section class="hero card-surface">
+        <div class="hero-copy">
+          <p class="eyebrow">MVP funcional</p>
+          <h1>Transcreva áudio do navegador com uma interface clara e profissional.</h1>
+          <p class="lead">
+            Grave a saída do sistema, o microfone ou as duas fontes separadamente,
+            reproduza o resultado e envie para processamento e transcrição.
           </p>
         </div>
 
-        <section class="mode-panel" aria-label="Fonte de áudio">
-          <div class="mode-panel-header">
-            <div>
-              <h2>Fonte de áudio</h2>
-              <p>
-                Escolha o que deseja capturar antes de iniciar a gravação.
-              </p>
-            </div>
-          </div>
-
-          <div class="mode-options" role="radiogroup" aria-label="Fonte de áudio">
-            <label class="mode-option">
-              <input type="radio" name="source-mode" value="OUTPUT" checked />
-              <span>Somente saída</span>
-            </label>
-            <label class="mode-option">
-              <input type="radio" name="source-mode" value="INPUT" />
-              <span>Somente entrada</span>
-            </label>
-            <label class="mode-option">
-              <input type="radio" name="source-mode" value="BOTH" />
-              <span>Entrada + saída</span>
-            </label>
-          </div>
-        </section>
-
-        <div class="actions">
-          <button id="start-button" type="button">Iniciar captura</button>
-          <button id="stop-button" type="button" disabled>Parar captura</button>
+        <div class="hero-points" aria-label="Destaques">
+          <article>
+            <span class="hero-point-label">Captura</span>
+            <strong>OUTPUT, INPUT ou BOTH</strong>
+            <p>Preserva a origem do áudio para uso no pipeline atual.</p>
+          </article>
+          <article>
+            <span class="hero-point-label">Processamento</span>
+            <strong>WAV padronizado</strong>
+            <p>Normalização com FFmpeg antes da transcrição no backend.</p>
+          </article>
+          <article>
+            <span class="hero-point-label">Resultado</span>
+            <strong>Transcrição em JSON</strong>
+            <p>Resposta pronta para leitura no frontend.</p>
+          </article>
         </div>
+      </section>
 
-        <section class="playback-panel" id="playback-panel" hidden>
-          <div class="playback-header">
+      <div class="dashboard">
+        <section class="recording-panel card-surface">
+          <div class="panel-heading">
             <div>
-              <h2>Reprodução</h2>
-              <p id="playback-message">
-                Os áudios finalizados aparecerão aqui para reprodução local.
+              <p class="panel-kicker">Captura de áudio</p>
+              <h2>Escolha a fonte e inicie a gravação</h2>
+            </div>
+            <div class="status-panel" aria-live="polite">
+              <div class="status-line">
+                <span class="status-label">Estado</span>
+                <span class="status-badge" id="capture-state">IDLE</span>
+              </div>
+              <p class="message" id="status-message">
+                Nenhuma captura ativa. Escolha a fonte de áudio e clique em
+                Iniciar captura.
               </p>
+              <div class="recording-meta" aria-live="polite">
+                <span class="recording-pill">Tempo de gravação</span>
+                <strong id="recording-duration">00:00</strong>
+              </div>
             </div>
           </div>
 
-          <div class="source-grid" id="playback-sources"></div>
-          <div class="playback-actions">
-            <button id="new-recording-button" type="button" hidden>
-              Nova gravação
-            </button>
-          </div>
-        </section>
-
-        <section class="upload-panel" id="upload-panel" hidden>
-          <div class="upload-header">
-            <div>
-              <h2>Processamento e transcrição</h2>
-              <p id="upload-message">
-                O áudio pode ser enviado para o backend para processamento e
-                transcrição.
-              </p>
+          <section class="mode-panel" aria-labelledby="source-title">
+            <div class="mode-panel-header">
+              <div>
+                <p class="panel-kicker">Fonte de áudio</p>
+                <h3 id="source-title">Selecione o que deseja capturar</h3>
+                <p>
+                  Somente saída, somente entrada ou as duas fontes em paralelo.
+                </p>
+              </div>
             </div>
-            <span class="upload-badge" id="upload-state">UPLOAD_IDLE</span>
-          </div>
 
-          <div class="upload-actions">
-            <button id="upload-button" type="button">Enviar para transcrição</button>
-          </div>
-
-          <div class="source-grid" id="upload-result" hidden></div>
-        </section>
-
-        <section class="transcription-panel" id="transcription-panel" hidden>
-          <div class="transcription-header">
-            <div>
-              <h2>Transcrição</h2>
-              <p id="transcription-message">
-                A transcrição retornada pelo backend aparecerá aqui.
-              </p>
+            <div class="mode-options" role="radiogroup" aria-label="Fonte de áudio">
+              <label class="mode-option">
+                <input type="radio" name="source-mode" value="OUTPUT" checked />
+                <span class="mode-option-copy">
+                  <strong>Somente saída</strong>
+                  <small>Captura o áudio compartilhado pela aba, janela ou tela.</small>
+                </span>
+              </label>
+              <label class="mode-option">
+                <input type="radio" name="source-mode" value="INPUT" />
+                <span class="mode-option-copy">
+                  <strong>Somente entrada</strong>
+                  <small>Captura o microfone do usuário.</small>
+                </span>
+              </label>
+              <label class="mode-option">
+                <input type="radio" name="source-mode" value="BOTH" />
+                <span class="mode-option-copy">
+                  <strong>Entrada + saída</strong>
+                  <small>Grava entrada e saída em fontes separadas.</small>
+                </span>
+              </label>
             </div>
-            <span class="transcription-badge" id="transcription-state">-</span>
+          </section>
+
+          <div class="actions actions--primary">
+            <button id="start-button" type="button">Iniciar captura</button>
+            <button id="stop-button" type="button" disabled>Parar captura</button>
           </div>
 
-          <div class="source-grid" id="transcription-sources"></div>
+          <p class="support-note">
+            A captura depende das permissões do navegador e da fonte disponível.
+          </p>
         </section>
 
-        <section class="diagnostics" aria-label="Diagnóstico da gravação">
-          <h2>Diagnóstico</h2>
-          <div class="source-grid" id="diagnostics-sources"></div>
-        </section>
+        <aside class="dashboard-sidebar">
+          <section class="playback-panel card-surface" id="playback-panel" hidden>
+            <div class="panel-heading panel-heading--compact">
+              <div>
+                <p class="panel-kicker">Reprodução</p>
+                <h2>Ouça a gravação localmente</h2>
+                <p id="playback-message">
+                  Os áudios finalizados aparecerão aqui para reprodução local.
+                </p>
+              </div>
+            </div>
 
-        <p class="note">
+            <div class="source-grid" id="playback-sources"></div>
+
+            <div class="playback-actions">
+              <button id="new-recording-button" type="button" hidden>
+                Nova gravação
+              </button>
+            </div>
+          </section>
+
+          <section class="upload-panel card-surface" id="upload-panel" hidden>
+            <div class="panel-heading panel-heading--compact">
+              <div>
+                <p class="panel-kicker">Processamento</p>
+                <h2>Envio e transcrição</h2>
+                <p id="upload-message">
+                  O áudio pode ser enviado para o backend para processamento e
+                  transcrição.
+                </p>
+              </div>
+              <span class="upload-badge" id="upload-state">UPLOAD_IDLE</span>
+            </div>
+
+            <div class="pipeline" aria-label="Etapas do upload">
+              <span>Gravação concluída</span>
+              <span>Enviando áudio</span>
+              <span>Processando áudio</span>
+              <span>Transcrevendo</span>
+              <span>Concluído</span>
+            </div>
+
+            <div class="upload-actions">
+              <button id="upload-button" type="button">Enviar para transcrição</button>
+            </div>
+
+            <div class="source-grid" id="upload-result" hidden></div>
+          </section>
+
+          <section class="transcription-panel card-surface" id="transcription-panel" hidden>
+            <div class="panel-heading panel-heading--compact">
+              <div>
+                <p class="panel-kicker">Transcrição</p>
+                <h2>Resultado do backend</h2>
+                <p id="transcription-message">
+                  A transcrição retornada pelo backend aparecerá aqui.
+                </p>
+              </div>
+              <span class="transcription-badge" id="transcription-state">-</span>
+            </div>
+
+            <div class="source-grid" id="transcription-sources"></div>
+          </section>
+
+          <section class="diagnostics card-surface" aria-label="Diagnóstico da gravação" hidden>
+            <div class="panel-heading panel-heading--compact">
+              <div>
+                <p class="panel-kicker">Diagnóstico</p>
+                <h2>Informações da gravação</h2>
+              </div>
+            </div>
+            <div class="source-grid" id="diagnostics-sources"></div>
+          </section>
+        </aside>
+      </div>
+
+      <footer class="site-footer">
+        <p>
           A captura depende do suporte do navegador e da fonte selecionada.
           Algumas seleções podem não fornecer áudio.
         </p>
-      </section>
+      </footer>
     </main>
 
     <script src="js/main.js"></script>
